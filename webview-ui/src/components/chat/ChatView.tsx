@@ -54,6 +54,7 @@ import { CheckpointWarning } from "./CheckpointWarning"
 import { IdeaSuggestionsBox } from "../kilocode/chat/IdeaSuggestionsBox" // kilocode_change
 import { KilocodeNotifications } from "../kilocode/KilocodeNotifications" // kilocode_change
 import { QueuedMessages } from "./QueuedMessages"
+import { ChatEventTrace } from "./ChatEventTrace"
 import { buildDocLink } from "@/utils/docLinks"
 // import DismissibleUpsell from "../common/DismissibleUpsell" // kilocode_change: unused
 // import { useCloudUpsell } from "@src/hooks/useCloudUpsell" // kilocode_change: unused
@@ -1655,17 +1656,18 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 				<>
 					<div className="grow flex flex-col min-h-0" ref={scrollContainerRef}>
 						<div className="flex-auto min-h-0">
-							<Virtuoso
-								ref={virtuosoRef}
-								key={task.ts}
-								className="scrollable grow overflow-y-scroll mb-1"
-								increaseViewportBy={{ top: 400, bottom: 400 }} // kilocode_change: use more modest numbers to see if they reduce gray screen incidence
-								data={groupedMessages}
-								itemContent={itemContent}
-								followOutput={(isAtBottom: boolean) => isAtBottom || stickyFollowRef.current}
-								atBottomStateChange={(isAtBottom: boolean) => {
-									setIsAtBottom(isAtBottom)
-									// Only show the scroll-to-bottom button if not at bottom
+					<Virtuoso
+						ref={virtuosoRef}
+						key={task.ts}
+						className="scrollable grow overflow-y-scroll mb-1"
+						increaseViewportBy={{ top: 400, bottom: 400 }} // kilocode_change: use more modest numbers to see if they reduce gray screen incidence
+						data={groupedMessages}
+						itemContent={itemContent}
+						components={{ Footer: () => <ChatEventTrace messages={visibleMessages} /> }}
+						followOutput={(isAtBottom: boolean) => isAtBottom || stickyFollowRef.current}
+						atBottomStateChange={(isAtBottom: boolean) => {
+							setIsAtBottom(isAtBottom)
+							// Only show the scroll-to-bottom button if not at bottom
 									setShowScrollToBottom(!isAtBottom)
 								}}
 								atBottomThreshold={10}

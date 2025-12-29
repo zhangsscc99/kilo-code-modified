@@ -55,6 +55,7 @@ import { IdeaSuggestionsBox } from "../kilocode/chat/IdeaSuggestionsBox" // kilo
 import { KilocodeNotifications } from "../kilocode/KilocodeNotifications" // kilocode_change
 import { QueuedMessages } from "./QueuedMessages"
 import { ChatEventTrace } from "./ChatEventTrace"
+import { WorkflowPanel } from "./WorkflowPanel"
 import { buildDocLink } from "@/utils/docLinks"
 // import DismissibleUpsell from "../common/DismissibleUpsell" // kilocode_change: unused
 // import { useCloudUpsell } from "@src/hooks/useCloudUpsell" // kilocode_change: unused
@@ -190,6 +191,8 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 	>(undefined)
 	const [isCondensing, setIsCondensing] = useState<boolean>(false)
 	const [showAnnouncementModal, setShowAnnouncementModal] = useState(false)
+	const [showWorkflowPanel, setShowWorkflowPanel] = useState(false)
+	const [workflowPanelCollapsed, setWorkflowPanelCollapsed] = useState(false)
 	const everVisibleMessagesTsRef = useRef<LRUCache<number, boolean>>(
 		new LRUCache({
 			max: 100,
@@ -1139,7 +1142,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 		return false
 	}, [])
 
-	const groupedMessages = useMemo(() => {
+const groupedMessages = useMemo(() => {
 		// Only filter out the launch ask and result messages - browser actions appear in chat
 		const result: ClineMessage[] = visibleMessages.filter((msg) => !isBrowserSessionMessage(msg))
 
@@ -1153,6 +1156,21 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 		}
 		return result
 	}, [isCondensing, visibleMessages, isBrowserSessionMessage])
+
+	const workflowPanelAgentState = useMemo(
+		() => {
+			const recent = visibleMessages.at(-1)
+			return {
+				statusLabel: isStreaming ? "Streaming" : sendingDisabled ? "Busy" : "Idle",
+				mode,
+				taskLabel: task?.text,
+				messageCount: visibleMessages.length,
+				lastEvent: recent?.text || recent?.say || recent?.ask,
+				lastUpdated: new Date().toLocaleTimeString(),
+			}
+		},
+		[visibleMessages, isStreaming, sendingDisabled, mode, task?.text],
+	)
 
 	// scrolling
 
@@ -1663,7 +1681,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 						increaseViewportBy={{ top: 400, bottom: 400 }} // kilocode_change: use more modest numbers to see if they reduce gray screen incidence
 						data={groupedMessages}
 						itemContent={itemContent}
-						components={{ Footer: () => <ChatEventTrace messages={visibleMessages} /> }}
+						// components={{ Footer: () => <ChatEventTrace messages={visibleMessages} /> }}
 						followOutput={(isAtBottom: boolean) => isAtBottom || stickyFollowRef.current}
 						atBottomStateChange={(isAtBottom: boolean) => {
 							setIsAtBottom(isAtBottom)
@@ -1802,10 +1820,28 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 				modeShortcutText={modeShortcutText}
 				sendMessageOnEnter={sendMessageOnEnter} // kilocode_change
 				showBrowserDockToggle={showBrowserDockToggle}
+				workflowPanelButtonVisible={true}
+				onToggleWorkflowPanel={() => {
+					setWorkflowPanelCollapsed(false)
+					setShowWorkflowPanel((prev) => !prev)
+				}}
 			/>
 			{/* kilocode_change: added settings toggle the profile and model selection */}
 			<BottomControls showApiConfig />
 			{/* kilocode_change: end */}
+
+			{showWorkflowPanel && (
+				<WorkflowPanel
+					messages={visibleMessages}
+					collapsed={workflowPanelCollapsed}
+					onToggleCollapse={() => setWorkflowPanelCollapsed((prev) => !prev)}
+					onClose={() => {
+						setShowWorkflowPanel(false)
+						setWorkflowPanelCollapsed(false)
+					}}
+					agentState={workflowPanelAgentState}
+				/>
+			)}
 
 			{/* kilocode_change: disable {isProfileDisabled && (
 				<div className="px-3">

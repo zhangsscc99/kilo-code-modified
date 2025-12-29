@@ -10,6 +10,7 @@ export interface ChatTraceEvent {
 	timestamp: number
 	title: string
 	detail?: string
+	sourceMessage?: ClineMessage
 }
 
 const SUBAGENT_TOOL_NAMES = new Set([
@@ -165,6 +166,7 @@ function buildEventFromMessage(message: ClineMessage, index: number): ChatTraceE
 			type: "subagent",
 			title: toolName ? `Subtask · ${toolName}` : "Subtask event",
 			detail: truncateDetail(message.text || (toolPayload?.message as string | undefined)),
+			sourceMessage: message,
 		}
 	}
 
@@ -182,6 +184,7 @@ function buildEventFromMessage(message: ClineMessage, index: number): ChatTraceE
 			type: "tool",
 			title: toolName ? `Tool · ${toolName}` : "Tool event",
 			detail: truncateDetail(detail),
+			sourceMessage: message,
 		}
 	}
 
@@ -191,6 +194,7 @@ function buildEventFromMessage(message: ClineMessage, index: number): ChatTraceE
 			type: "agent",
 			title: message.say ? `Agent · ${message.say}` : `Agent · ${message.ask}`,
 			detail: truncateDetail(message.text),
+			sourceMessage: message,
 		}
 	}
 
@@ -200,6 +204,7 @@ function buildEventFromMessage(message: ClineMessage, index: number): ChatTraceE
 			type: "hook",
 			title: message.say ? `Hook · ${message.say}` : `Hook · ${message.ask}`,
 			detail: truncateDetail(message.text),
+			sourceMessage: message,
 		}
 	}
 
@@ -209,6 +214,7 @@ function buildEventFromMessage(message: ClineMessage, index: number): ChatTraceE
 			type: "hook",
 			title: "Hook · progress",
 			detail: truncateDetail(message.progressStatus.text),
+			sourceMessage: message,
 		}
 	}
 

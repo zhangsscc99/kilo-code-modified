@@ -31,7 +31,7 @@ import { KiloProfileSelector } from "../kilocode/chat/KiloProfileSelector"
 import { MAX_IMAGES_PER_MESSAGE } from "./ChatView"
 import ContextMenu from "./ContextMenu"
 import { ImageWarningBanner } from "./ImageWarningBanner"
-import { VolumeX, Pin, Check, WandSparkles, SendHorizontal, Paperclip, MessageSquareX } from "lucide-react"
+import { VolumeX, Pin, Check, WandSparkles, SendHorizontal, Paperclip, MessageSquareX, GitBranch } from "lucide-react"
 import { IndexingStatusBadge } from "./IndexingStatusBadge"
 import { MicrophoneButton } from "./MicrophoneButton" // kilocode_change: STT microphone button
 import { VolumeVisualizer } from "./VolumeVisualizer" // kilocode_change: STT volume level visual
@@ -71,7 +71,11 @@ interface ChatTextAreaProps {
 	onCancel?: () => void
 	sendMessageOnEnter?: boolean // kilocode_change
 	showBrowserDockToggle?: boolean
+	workflowPanelButtonVisible?: boolean
+	onToggleWorkflowPanel?: () => void
 }
+
+const ENABLE_WORKFLOW_PANEL_BUTTON = true // 设置为 false 可快速隐藏工作流面板按钮
 
 // kilocode_change start
 function handleSessionCommand(trimmedInput: string, setInputValue: (value: string) => void) {
@@ -141,6 +145,8 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 			isEditMode = false,
 			onCancel,
 			sendMessageOnEnter = true,
+			workflowPanelButtonVisible,
+			onToggleWorkflowPanel,
 		},
 		ref,
 	) => {
@@ -1652,6 +1658,26 @@ export const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 
 					{/* kilocode_change start */}
 					{!isEditMode && <IndexingStatusBadge className={cn({ hidden: containerWidth < 235 })} />}
+
+					{ENABLE_WORKFLOW_PANEL_BUTTON && workflowPanelButtonVisible && onToggleWorkflowPanel && (
+						<StandardTooltip content="工作流面板">
+							<button
+								aria-label="Workflow panel"
+								onClick={onToggleWorkflowPanel}
+								className={cn(
+									"relative inline-flex items-center justify-center",
+									"bg-transparent border-none p-1.5",
+									"rounded-md min-w-[28px] min-h-[28px]",
+									"opacity-60 hover:opacity-100 text-vscode-descriptionForeground hover:text-vscode-foreground",
+									"transition-all duration-150",
+									"hover:bg-[rgba(255,255,255,0.03)] hover:border-[rgba(255,255,255,0.15)]",
+									"focus:outline-none focus-visible:ring-1 focus-visible:ring-vscode-focusBorder",
+									"active:bg-[rgba(255,255,255,0.1)]",
+								)}>
+								<GitBranch className={cn("w-4 h-4", { hidden: containerWidth < 235 })} />
+							</button>
+						</StandardTooltip>
+					)}
 
 					<StandardTooltip content="Add Context (@)">
 						<button

@@ -15,6 +15,7 @@ import type {
 	OrganizationAllowList,
 	ShareVisibility,
 	QueuedMessage,
+	RooCodeEventName,
 } from "@roo-code/types"
 
 import { GitCommit } from "../utils/git"
@@ -77,6 +78,13 @@ export interface LanguageModelChatSelector {
 	family?: string
 	version?: string
 	id?: string
+}
+
+export interface WebviewTaskEvent {
+	eventName: RooCodeEventName
+	payload: unknown[]
+	taskId?: number
+	taskIdentifier?: string
 }
 
 // Represents JSON data that is sent from extension to webview, called
@@ -196,6 +204,7 @@ export interface ExtensionMessage {
 		| "deviceAuthFailed" // kilocode_change: Device auth failed
 		| "deviceAuthCancelled" // kilocode_change: Device auth cancelled
 		| "chatCompletionResult" // kilocode_change: FIM completion result for chat text area
+		| "taskEvent"
 	text?: string
 	// kilocode_change start
 	completionRequestId?: string // Correlation ID from request
@@ -207,6 +216,8 @@ export interface ExtensionMessage {
 		| TasksByIdResponsePayload
 		| TaskHistoryResponsePayload
 		| [string, string] // For file save events [taskId, filePath]
+	taskEvent?: WebviewTaskEvent
+	taskEventTimestamp?: number
 	// kilocode_change end
 	// Checkpoint warning message
 	checkpointWarning?: {

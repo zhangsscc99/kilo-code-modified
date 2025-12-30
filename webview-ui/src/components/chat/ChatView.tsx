@@ -114,6 +114,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 		messageQueue = [],
 		sendMessageOnEnter, // kilocode_change
 		isBrowserSessionActive,
+		taskEvents,
 	} = useExtensionState()
 
 	const messagesRef = useRef(messages)
@@ -1833,6 +1834,7 @@ const groupedMessages = useMemo(() => {
 			{showWorkflowPanel && (
 				<WorkflowPanel
 					messages={visibleMessages}
+					taskEvents={taskEvents}
 					collapsed={workflowPanelCollapsed}
 					onToggleCollapse={() => setWorkflowPanelCollapsed((prev) => !prev)}
 					onClose={() => {

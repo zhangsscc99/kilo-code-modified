@@ -53,7 +53,12 @@ import { Package } from "../../shared/package"
 import { findLast } from "../../shared/array"
 import { supportPrompt } from "../../shared/support-prompt"
 import { GlobalFileNames } from "../../shared/globalFileNames"
-import type { ExtensionMessage, ExtensionState, MarketplaceInstalledMetadata } from "../../shared/ExtensionMessage"
+import type {
+	ExtensionMessage,
+	ExtensionState,
+	MarketplaceInstalledMetadata,
+	WebviewTaskEvent,
+} from "../../shared/ExtensionMessage"
 import { Mode, defaultModeSlug, getModeBySlug } from "../../shared/modes"
 import { experimentDefault } from "../../shared/experiments"
 import { formatLanguage } from "../../shared/language"
@@ -226,17 +231,32 @@ export class ClineProvider
 		this.taskCreationCallback = (instance: Task) => {
 			this.emit(RooCodeEventName.TaskCreated, instance)
 
-			// Create named listener functions so we can remove them later.
-			const onTaskStarted = () => this.emit(RooCodeEventName.TaskStarted, instance.taskId)
+			const forwardTaskEvent = (eventName: RooCodeEventName, ...payload: unknown[]) => {
+				this.postTaskEventToWebview(eventName, payload, instance.taskId)
+			}
+
+			const onTaskStarted = () => {
+				this.emit(RooCodeEventName.TaskStarted, instance.taskId)
+				forwardTaskEvent(RooCodeEventName.TaskStarted, instance.taskId)
+			}
 			const onTaskCompleted = (taskId: string, tokenUsage: TokenUsage, toolUsage: ToolUsage) => {
 				kilo_execIfExtension(() => {
 					SessionManager.init()?.doSync(true)
 				})
 
-				return this.emit(RooCodeEventName.TaskCompleted, taskId, tokenUsage, toolUsage) // kilocode_change: return
+				const result = this.emit(RooCodeEventName.TaskCompleted, taskId, tokenUsage, toolUsage) // kilocode_change: return
+				forwardTaskEvent(
+					RooCodeEventName.TaskCompleted,
+					taskId,
+					tokenUsage,
+					toolUsage,
+					{ isSubtask: Boolean(instance.parentTaskId) },
+				)
+				return result
 			}
 			const onTaskAborted = async () => {
 				this.emit(RooCodeEventName.TaskAborted, instance.taskId)
+				forwardTaskEvent(RooCodeEventName.TaskAborted, instance.taskId)
 
 				try {
 					// Only rehydrate on genuine streaming failures.
@@ -264,18 +284,56 @@ export class ClineProvider
 					)
 				}
 			}
-			const onTaskFocused = () => this.emit(RooCodeEventName.TaskFocused, instance.taskId)
-			const onTaskUnfocused = () => this.emit(RooCodeEventName.TaskUnfocused, instance.taskId)
-			const onTaskActive = (taskId: string) => this.emit(RooCodeEventName.TaskActive, taskId)
-			const onTaskInteractive = (taskId: string) => this.emit(RooCodeEventName.TaskInteractive, taskId)
-			const onTaskResumable = (taskId: string) => this.emit(RooCodeEventName.TaskResumable, taskId)
-			const onTaskIdle = (taskId: string) => this.emit(RooCodeEventName.TaskIdle, taskId)
-			const onTaskPaused = (taskId: string) => this.emit(RooCodeEventName.TaskPaused, taskId)
-			const onTaskUnpaused = (taskId: string) => this.emit(RooCodeEventName.TaskUnpaused, taskId)
-			const onTaskSpawned = (taskId: string) => this.emit(RooCodeEventName.TaskSpawned, taskId)
-			const onTaskUserMessage = (taskId: string) => this.emit(RooCodeEventName.TaskUserMessage, taskId)
-			const onTaskTokenUsageUpdated = (taskId: string, tokenUsage: TokenUsage, toolUsage: ToolUsage) =>
+			const onTaskFocused = () => {
+				this.emit(RooCodeEventName.TaskFocused, instance.taskId)
+				forwardTaskEvent(RooCodeEventName.TaskFocused, instance.taskId)
+			}
+			const onTaskUnfocused = () => {
+				this.emit(RooCodeEventName.TaskUnfocused, instance.taskId)
+				forwardTaskEvent(RooCodeEventName.TaskUnfocused, instance.taskId)
+			}
+			const onTaskActive = (taskId: string) => {
+				this.emit(RooCodeEventName.TaskActive, taskId)
+				forwardTaskEvent(RooCodeEventName.TaskActive, taskId)
+			}
+			const onTaskInteractive = (taskId: string) => {
+				this.emit(RooCodeEventName.TaskInteractive, taskId)
+				forwardTaskEvent(RooCodeEventName.TaskInteractive, taskId)
+			}
+			const onTaskResumable = (taskId: string) => {
+				this.emit(RooCodeEventName.TaskResumable, taskId)
+				forwardTaskEvent(RooCodeEventName.TaskResumable, taskId)
+			}
+			const onTaskIdle = (taskId: string) => {
+				this.emit(RooCodeEventName.TaskIdle, taskId)
+				forwardTaskEvent(RooCodeEventName.TaskIdle, taskId)
+			}
+			const onTaskPaused = (taskId: string) => {
+				this.emit(RooCodeEventName.TaskPaused, taskId)
+				forwardTaskEvent(RooCodeEventName.TaskPaused, taskId)
+			}
+			const onTaskUnpaused = (taskId: string) => {
+				this.emit(RooCodeEventName.TaskUnpaused, taskId)
+				forwardTaskEvent(RooCodeEventName.TaskUnpaused, taskId)
+			}
+			const onTaskSpawned = (childTaskId: string) => {
+				this.emit(RooCodeEventName.TaskSpawned, childTaskId)
+				forwardTaskEvent(RooCodeEventName.TaskSpawned, instance.taskId, childTaskId)
+			}
+			const onTaskUserMessage = (taskId: string) => {
+				this.emit(RooCodeEventName.TaskUserMessage, taskId)
+			}
+			const onTaskTokenUsageUpdated = (taskId: string, tokenUsage: TokenUsage, toolUsage: ToolUsage) => {
 				this.emit(RooCodeEventName.TaskTokenUsageUpdated, taskId, tokenUsage, toolUsage)
+				forwardTaskEvent(RooCodeEventName.TaskTokenUsageUpdated, taskId, tokenUsage, toolUsage)
+			}
+			const onTaskModeSwitched = (taskId: string, mode: string) => {
+				forwardTaskEvent(RooCodeEventName.TaskModeSwitched, taskId, mode)
+			}
+			const onTaskMessage = (payload: { action: "created" | "updated"; message: ClineMessage }) => {
+				const messagePayload = { taskId: instance.taskId, ...payload }
+				forwardTaskEvent(RooCodeEventName.Message, messagePayload)
+			}
 			const onModelChanged = () => this.postStateToWebview() // kilocode_change: Listen for model changes in virtual quota fallback
 
 			// Attach the listeners.
@@ -293,6 +351,8 @@ export class ClineProvider
 			instance.on(RooCodeEventName.TaskSpawned, onTaskSpawned)
 			instance.on(RooCodeEventName.TaskUserMessage, onTaskUserMessage)
 			instance.on(RooCodeEventName.TaskTokenUsageUpdated, onTaskTokenUsageUpdated)
+			instance.on(RooCodeEventName.TaskModeSwitched, onTaskModeSwitched)
+			instance.on(RooCodeEventName.Message, onTaskMessage)
 			instance.on("modelChanged", onModelChanged) // kilocode_change: Listen for model changes in virtual quota fallback
 
 			// Store the cleanup functions for later removal.
@@ -311,6 +371,8 @@ export class ClineProvider
 				() => instance.off(RooCodeEventName.TaskUnpaused, onTaskUnpaused),
 				() => instance.off(RooCodeEventName.TaskSpawned, onTaskSpawned),
 				() => instance.off(RooCodeEventName.TaskTokenUsageUpdated, onTaskTokenUsageUpdated),
+				() => instance.off(RooCodeEventName.TaskModeSwitched, onTaskModeSwitched),
+				() => instance.off(RooCodeEventName.Message, onTaskMessage),
 				() => instance.off("modelChanged", onModelChanged), // kilocode_change: Clean up model change listener
 			])
 		}
@@ -1966,6 +2028,22 @@ ${prompt}
 			await this.postMessageToWebview({ type: "action", action: "cloudButtonClicked" })
 		}
 	}
+
+private postTaskEventToWebview(eventName: RooCodeEventName, payload: unknown[], taskIdentifier?: string) {
+	const numericTaskId = taskIdentifier ? Number(taskIdentifier) : undefined
+	const resolvedTaskId = Number.isFinite(numericTaskId) ? (numericTaskId as number) : undefined
+	const taskEvent: WebviewTaskEvent = {
+		eventName,
+		payload,
+		taskId: resolvedTaskId,
+		taskIdentifier,
+	}
+	this.postMessageToWebview({
+		type: "taskEvent",
+		taskEvent,
+		taskEventTimestamp: Date.now(),
+	})
+}
 
 	// kilocode_change start
 	async postRulesDataToWebview() {
@@ -3827,6 +3905,11 @@ Here is the project's README to help you get started:\n\n${mcpDetails.readmeCont
 		// 6) Emit TaskDelegated (provider-level)
 		try {
 			this.emit(RooCodeEventName.TaskDelegated, parentTaskId, child.taskId)
+			this.postTaskEventToWebview(
+				RooCodeEventName.TaskDelegated,
+				[parentTaskId, child.taskId],
+				parentTaskId,
+			)
 		} catch {
 			// non-fatal
 		}
@@ -3979,6 +4062,11 @@ Here is the project's README to help you get started:\n\n${mcpDetails.readmeCont
 		// 5) Emit TaskDelegationCompleted (provider-level)
 		try {
 			this.emit(RooCodeEventName.TaskDelegationCompleted, parentTaskId, childTaskId, completionResultSummary)
+			this.postTaskEventToWebview(
+				RooCodeEventName.TaskDelegationCompleted,
+				[parentTaskId, childTaskId, completionResultSummary],
+				parentTaskId,
+			)
 		} catch {
 			// non-fatal
 		}
@@ -4013,6 +4101,11 @@ Here is the project's README to help you get started:\n\n${mcpDetails.readmeCont
 		// 9) Emit TaskDelegationResumed (provider-level)
 		try {
 			this.emit(RooCodeEventName.TaskDelegationResumed, parentTaskId, childTaskId)
+			this.postTaskEventToWebview(
+				RooCodeEventName.TaskDelegationResumed,
+				[parentTaskId, childTaskId],
+				parentTaskId,
+			)
 		} catch {
 			// non-fatal
 		}

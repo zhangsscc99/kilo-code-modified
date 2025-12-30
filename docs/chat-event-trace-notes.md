@@ -16,17 +16,46 @@
 
 ## 3. Workflow 面板的数据是怎么来的？
 
-- 目前面板里的节点、事件列表和 Agent 状态，全部由 `ChatView` 已经拥有的 `clineMessages` 推断出来，没有新的后端接口。我们根据消息的 ask/say 类型以及工具 payload（`tool`、`command_output`、`subtask_result`、`condense_context` 等）将其归类为 agent/tool/subagent/hook，再按时间顺序生成节点或事件条目。
-- 因此“节点”并不是实际的 DAG，只是对现有聊天流的可视化封装；视觉上是单列时间线，左侧用彩色圆点与虚线将节点依次连接（agent/工具/子代理/hook 颜色与节点类型一致）。能看到的“真实数据”就是本来就展示在聊天里的工具调用/子任务/Hook 信息。
-- 等将来有正式的工作流事件流（例如 RooCode TaskEvent 或其他后端 API）时，可以把 `buildWorkflowNodes` 等推断逻辑替换为真实数据源，这样就能展示准确的拓扑与连线。
+- 现在的 Workflow 面板直接消费扩展端转发的 `TaskEvent`。扩展端在 `ClineProvider` 中将 `RooCodeEventName` + payload 打包成 `WebviewTaskEvent` 发往 webview，`ExtensionStateContext` 把这些事件落在本地 `taskEvents` 数组，再交给 `buildWorkflowNodesFromTaskEvents` 构建节点。
+- `buildWorkflowNodesFromTaskEvents` 现在会为每个 task 维护一条事件时间线：一旦捕获到新的 agent `Message`，就复制当前时间线的数据生成新的 snapshot（ID 为 `taskId#step`），并把这一刻的内部事件写进节点，形成“节点随着步骤增加逐渐成长”的链式效果。
+- TaskCompleted/TaskAborted 会把最后一个 snapshot 的 `completedAt` 结束时间补全；`TaskModeSwitched` 更新节点的 mode/label。
+- Subagent（即 `TaskDelegated`/`TaskSpawned` 的 child task）继续作为独立节点存在：事件里带着 child taskId，构建器创建子节点并通过 parentId 与父节点连线。
 
-### DAG 设计思路（规划中）
+### DAG 设计思路（进行中）
 
-- DAG（Directed Acyclic Graph）意味着节点之间有明确的有向边且无环，适合表示“agent → tool → sub-agent”这种流程。真正的 DAG 实现需要后端提供节点 ID 和父子关系，比如 TaskEvent 的 `TaskDelegated`、`TaskToolFailed` 等。前端接入这类数据后，可以构建包含 `nodes`（类型、模式、耗时、文本）和 `edges`（from/to）的结构，再用图布局库绘制连线、支持拖拽缩放。
-- 当前版本仅能根据消息的时间顺序临时列出节点，无法推断真实 parent/child，因此只是一个“近似列表”，等拿到官方事件流后再替换实现。
+- DAG（Directed Acyclic Graph）意味着节点之间有明确的有向边且无环，适合表示“agent → tool → sub-agent”这种流程。现在我们已经拥有 TaskEvent 数据和父子 taskId，所以可以构建真实节点，但仍需改进“一个节点囊括多个步骤”的行为。
+- agent 每出现一个新增步骤（Message / Hook 等会进入 `messages` 列表），构建器都会复制当前时间线生成新的 snapshot 节点，节点之间按 step 号顺序串联，便于理解推理轨迹。
+- TaskDelegated / TaskSpawned / TaskDelegationResumed / TaskDelegationCompleted 事件仍然继续用于创建跨 task 的父子节点，所以多层 subagent 会自然显示为树状结构。
+
+#### 数据来源与状态流
+
+1. **TaskEvent / RooCode 事件流（当前实现）**
+   - 扩展端监听 TaskEvent，并通过 `ExtensionMessage` 类型 `taskEvent` 推送给 webview。payload 中包含 `eventName`, `payload`, `taskId`, `taskIdentifier`, 以及必要的 parent/child ids。
+   - Webview 缓存这些事件，并在 Workflow 面板中实时映射为节点/边。Agent/工具/hook 的颜色、节点展开详情等都基于这份数据。
+   - 后续支持“节点回档 + 继续推演”时，可直接利用节点上的 taskId 调用扩展端的 checkpoint 恢复逻辑。
+
+2. **Kilocode Agent Manager 状态（备用）**
+   - 仍可作为补充信息，例如展示代理集群里不同角色的状态；但 DAG 主体以 TaskEvent 为准。
 
 ## 4. Agent State 时间线
 
 - UI 会把每次推断出的 Agent 状态 push 到本地数组，并按时间顺序（越下越新）渲染成带连线的列表；每条记录包含状态、模式、任务、消息数和最近事件文本，支持下拉查看全部历史。
 - Agent Events 标签同样沿用时间线样式：单列节点按照时间排序，左侧彩色圆点与虚线串联，每条事件展示简要描述和原始 `sourceMessage` JSON，便于调试。
 - 以上数据依然来自 `clineMessages` 的推断：当出现新的 ask/say 或工具调用时更新状态、记录消息数、保存最近事件文本。如果后端将来能提供完整的状态/事件日志，也可以替换成更精确的数据源。
+
+## 5. 节点回档/继续推演能力（规划）
+
+- 长期目标是做到“点击任意节点 → 展开详情 → 在该节点状态基础上继续聊天并生成新的分支”，类似游戏回档。实现前提：节点必须绑定真实的 `taskId`/`checkpointId`，点击后可调用扩展端已有的 checkpoint 恢复逻辑。
+- 这也是为何推荐接入 TaskEvent：一旦 DAG 基于真实的任务事件构建，节点就天然对应具体 task，可与文件系统 checkpoint、聊天记录 checkpoint、agent memory 同步回档。也方便在 UI 中展示“来自 triage agent 的分支”之类的交互。
+
+### 当前阶段的实施计划（不含回档）
+
+1. **扩展端**：监听 TaskEvent 并通过 `ExtensionMessage` 将事件推送到 webview，每条事件至少包含 `eventName`, `payload`, `taskId`, `parentTaskId`、`childTaskId`（若有）。
+2. **Webview 状态层**：新建一个 store/atom，缓存 TaskEvent 并构建 `nodes` + `edges` 数据结构。每个节点代表一个 Agent（或子任务），内部关联发生的 tool/hook 事件，且记录 `taskId`、持续时间、模式等信息。
+3. **WorkflowPanel UI**：
+   - 使用上述 DAG 数据渲染真实的节点列表（初期可继续使用纵向时间线形式）。
+   - 节点可点击展开详情（展示工具、Hook、时间、模式等），但暂不触发回档，仅用于查看。
+   - 现有 Agent State / Agent Events 标签继续复用消息推断，待 TaskEvent 数据完整后逐步迁移。
+4. **文档 / 测试**：记录 TaskEvent 接入方式，确保 WorkflowPanel 的渲染测试基于模拟 TaskEvent，而不是 `clineMessages`。
+
+未来在此基础上再接入“节点回档 + 继续推演”，届时只需在节点详情中添加回档入口，并复用已有的 `taskId` 元数据。

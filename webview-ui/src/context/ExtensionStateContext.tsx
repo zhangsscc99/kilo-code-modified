@@ -29,6 +29,7 @@ import { McpMarketplaceCatalog } from "../../../src/shared/kilocode/mcp" // kilo
 import { vscode } from "@src/utils/vscode"
 import { convertTextMateToHljs } from "@src/utils/textMateToHljs"
 import { ClineRulesToggles } from "@roo/cline-rules" // kilocode_change
+import type { ReceivedTaskEvent } from "@/types/taskEvents"
 
 export interface ExtensionStateContextType extends ExtensionState {
 	historyPreviewCollapsed?: boolean
@@ -78,6 +79,7 @@ export interface ExtensionStateContextType extends ExtensionState {
 	localWorkflows: ClineRulesToggles
 	// kilocode_change start
 	commands: Command[]
+	taskEvents: ReceivedTaskEvent[]
 	organizationAllowList: OrganizationAllowList
 	organizationSettingsVersion: number
 	cloudIsAuthenticated: boolean
@@ -365,6 +367,7 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 	const [filePaths, setFilePaths] = useState<string[]>([])
 	const [openedTabs, setOpenedTabs] = useState<Array<{ label: string; isActive: boolean; path?: string }>>([])
 	const [commands, setCommands] = useState<Command[]>([])
+	const [taskEvents, setTaskEvents] = useState<ReceivedTaskEvent[]>([])
 	const [mcpServers, setMcpServers] = useState<McpServer[]>([])
 	const [mcpMarketplaceCatalog, setMcpMarketplaceCatalog] = useState<McpMarketplaceCatalog>({ items: [] }) // kilocode_change
 	const [currentCheckpoint, setCurrentCheckpoint] = useState<string>()
@@ -470,6 +473,16 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 					setCommands(message.commands ?? [])
 					break
 				}
+				case "taskEvent": {
+					if (message.taskEvent) {
+						const eventPayload: ReceivedTaskEvent = {
+							...message.taskEvent,
+							taskEventTimestamp: message.taskEventTimestamp ?? Date.now(),
+						}
+						setTaskEvents((prev) => [...prev, eventPayload].slice(-500))
+					}
+					break
+				}
 				case "messageUpdated": {
 					const clineMessage = message.clineMessage!
 					setState((prevState) => {
@@ -526,7 +539,7 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 				}
 			}
 		},
-		[setListApiConfigMeta],
+		[setListApiConfigMeta, setTaskEvents],
 	)
 
 	useEffect(() => {
@@ -569,6 +582,7 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 		localWorkflows,
 		// kilocode_change end
 		commands,
+		taskEvents,
 		soundVolume: state.soundVolume,
 		ttsSpeed: state.ttsSpeed,
 		fuzzyMatchThreshold: state.fuzzyMatchThreshold,

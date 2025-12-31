@@ -16,10 +16,11 @@
 
 ## 3. Workflow 面板的数据是怎么来的？
 
-- 现在的 Workflow 面板直接消费扩展端转发的 `TaskEvent`。扩展端在 `ClineProvider` 中将 `RooCodeEventName` + payload 打包成 `WebviewTaskEvent` 发往 webview，`ExtensionStateContext` 把这些事件落在本地 `taskEvents` 数组，再交给 `buildWorkflowNodesFromTaskEvents` 构建节点。
-- `buildWorkflowNodesFromTaskEvents` 现在会为每个 task 维护一条事件时间线：一旦捕获到新的 agent `Message`，就复制当前时间线的数据生成新的 snapshot（ID 为 `taskId#step`），并把这一刻的内部事件写进节点，形成“节点随着步骤增加逐渐成长”的链式效果。
-- TaskCompleted/TaskAborted 会把最后一个 snapshot 的 `completedAt` 结束时间补全；`TaskModeSwitched` 更新节点的 mode/label。
-- Subagent（即 `TaskDelegated`/`TaskSpawned` 的 child task）继续作为独立节点存在：事件里带着 child taskId，构建器创建子节点并通过 parentId 与父节点连线。
+- 现在的 Workflow 面板直接消费扩展端转发的 `TaskEvent`。扩展端在 `ClineProvider` 中将 `RooCodeEventName` + payload 打包成 `WebviewTaskEvent` 发往 webview，`ExtensionStateContext` 把这些事件落在本地 `taskEvents` 数组，再交给 `buildWorkflowNodesFromTaskEvents` 构建节点。最近一次迭代主要包含：
+  1. **节点按步骤拆分**：`buildWorkflowNodesFromTaskEvents` 会为每个 task 维护一条事件时间线；一旦捕获到新的 agent `Message`，就复制当前时间线的数据生成新的 snapshot（ID 为 `taskId#step`），并把这一刻的内部事件写进节点，形成“节点随着步骤增加逐渐成长”的链式效果。Workflow 面板上，每个节点会显示 `stepIndex + label`，副标题是任务 ID。
+  2. **面板可缩放、默认更宽大**：Workflow 面板默认尺寸放大到原来的约 1.3 倍，并支持沿右边 / 底部 / 右下角拖拽调整宽高，以容纳更多按钮和节点。
+  3. **节点卡片尺寸微调**：单个节点卡片的宽度相当于父容器的 88%，展开的内部事件也沿用同样宽度，让面板内容紧凑且易读。
+- TaskCompleted/TaskAborted 会把最后一个 snapshot 的 `completedAt` 结束时间补全；`TaskModeSwitched` 更新节点的 mode/label；Subagent（即 `TaskDelegated`/`TaskSpawned` 的 child task）继续作为独立节点存在：事件里带着 child taskId，构建器创建子节点并通过 parentId 与父节点连线。
 
 ### DAG 设计思路（进行中）
 

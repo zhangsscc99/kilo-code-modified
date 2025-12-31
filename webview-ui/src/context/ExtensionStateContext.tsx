@@ -16,7 +16,13 @@ import {
 	DEFAULT_CHECKPOINT_TIMEOUT_SECONDS,
 } from "@roo-code/types"
 
-import { ExtensionMessage, ExtensionState, MarketplaceInstalledMetadata, Command } from "@roo/ExtensionMessage"
+import {
+	ExtensionMessage,
+	ExtensionState,
+	MarketplaceInstalledMetadata,
+	Command,
+	WorkflowNodeRestoreResultPayload,
+} from "@roo/ExtensionMessage"
 import { findLastIndex } from "@roo/array"
 import { McpServer } from "@roo/mcp"
 import { checkExistKey } from "@roo/checkExistApiConfig"
@@ -30,6 +36,7 @@ import { vscode } from "@src/utils/vscode"
 import { convertTextMateToHljs } from "@src/utils/textMateToHljs"
 import { ClineRulesToggles } from "@roo/cline-rules" // kilocode_change
 import type { ReceivedTaskEvent } from "@/types/taskEvents"
+import type { WorkflowRestoreState, WorkflowNodeRestoreRequest } from "@/types/workflow"
 
 export interface ExtensionStateContextType extends ExtensionState {
 	historyPreviewCollapsed?: boolean
@@ -80,6 +87,8 @@ export interface ExtensionStateContextType extends ExtensionState {
 	// kilocode_change start
 	commands: Command[]
 	taskEvents: ReceivedTaskEvent[]
+	workflowRestoreState: WorkflowRestoreState
+	requestWorkflowNodeRestore: (payload: WorkflowNodeRestoreRequest) => void
 	organizationAllowList: OrganizationAllowList
 	organizationSettingsVersion: number
 	cloudIsAuthenticated: boolean
@@ -368,6 +377,7 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 	const [openedTabs, setOpenedTabs] = useState<Array<{ label: string; isActive: boolean; path?: string }>>([])
 	const [commands, setCommands] = useState<Command[]>([])
 	const [taskEvents, setTaskEvents] = useState<ReceivedTaskEvent[]>([])
+	const [workflowRestoreState, setWorkflowRestoreState] = useState<WorkflowRestoreState>({})
 	const [mcpServers, setMcpServers] = useState<McpServer[]>([])
 	const [mcpMarketplaceCatalog, setMcpMarketplaceCatalog] = useState<McpMarketplaceCatalog>({ items: [] }) // kilocode_change
 	const [currentCheckpoint, setCurrentCheckpoint] = useState<string>()
@@ -483,6 +493,19 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 					}
 					break
 				}
+				case "workflowNodeRestoreResult": {
+					const result: WorkflowNodeRestoreResultPayload | undefined =
+						message.workflowRestoreResult || (message.payload as WorkflowNodeRestoreResultPayload | undefined)
+					if (result) {
+						setWorkflowRestoreState({
+							pendingSnapshotId: undefined,
+							lastSnapshotId: result.snapshotId,
+							status: result.status,
+							error: result.error,
+						})
+					}
+					break
+				}
 				case "messageUpdated": {
 					const clineMessage = message.clineMessage!
 					setState((prevState) => {
@@ -564,6 +587,19 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 		setPrevCloudIsAuthenticated(currentAuth)
 	}, [state.cloudIsAuthenticated, prevCloudIsAuthenticated, state.apiConfiguration?.apiProvider])
 
+	const requestWorkflowNodeRestore = useCallback(
+		(payload: WorkflowNodeRestoreRequest) => {
+			setWorkflowRestoreState({
+				pendingSnapshotId: payload.snapshotId,
+				lastSnapshotId: undefined,
+				status: undefined,
+				error: undefined,
+			})
+			vscode.postMessage({ type: "workflowNodeRestore", payload })
+		},
+		[],
+	)
+
 	const contextValue: ExtensionStateContextType = {
 		...state,
 		reasoningBlockCollapsed: state.reasoningBlockCollapsed ?? true,
@@ -583,6 +619,8 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 		// kilocode_change end
 		commands,
 		taskEvents,
+		workflowRestoreState,
+		requestWorkflowNodeRestore,
 		soundVolume: state.soundVolume,
 		ttsSpeed: state.ttsSpeed,
 		fuzzyMatchThreshold: state.fuzzyMatchThreshold,

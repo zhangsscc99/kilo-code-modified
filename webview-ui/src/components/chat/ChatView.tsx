@@ -115,6 +115,8 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 		sendMessageOnEnter, // kilocode_change
 		isBrowserSessionActive,
 		taskEvents,
+		workflowRestoreState,
+		requestWorkflowNodeRestore,
 	} = useExtensionState()
 
 	const messagesRef = useRef(messages)
@@ -1842,6 +1844,8 @@ const groupedMessages = useMemo(() => {
 						setWorkflowPanelCollapsed(false)
 					}}
 					agentState={workflowPanelAgentState}
+					workflowRestoreState={workflowRestoreState}
+					onRequestRestoreNode={requestWorkflowNodeRestore}
 				/>
 			)}
 

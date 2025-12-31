@@ -156,6 +156,7 @@ export interface WebviewMessage {
 		| "checkpointDiff"
 		| "checkpointRestore"
 		| "requestCheckpointRestoreApproval"
+		| "workflowNodeRestore"
 		| "seeNewChanges" // kilocode_change
 		| "deleteMcpServer"
 		| "humanRelayResponse"
@@ -491,6 +492,16 @@ export const checkoutRestorePayloadSchema = z.object({
 
 export type CheckpointRestorePayload = z.infer<typeof checkoutRestorePayloadSchema>
 
+export const workflowNodeRestorePayloadSchema = z.object({
+	snapshotId: z.string(),
+	taskId: z.string(),
+	stepIndex: z.number().optional(),
+	checkpointHash: z.string(),
+	checkpointTs: z.number().optional(),
+})
+
+export type WorkflowNodeRestorePayload = z.infer<typeof workflowNodeRestorePayloadSchema>
+
 export const requestCheckpointRestoreApprovalPayloadSchema = z.object({
 	commitHash: z.string(),
 	checkpointTs: z.number(),
@@ -530,6 +541,7 @@ export type WebViewMessagePayload =
 	// kilocode_change end
 	| CheckpointDiffPayload
 	| CheckpointRestorePayload
+	| WorkflowNodeRestorePayload
 	| IndexingStatusPayload
 	| IndexClearedPayload
 	| InstallMarketplaceItemWithParametersPayload

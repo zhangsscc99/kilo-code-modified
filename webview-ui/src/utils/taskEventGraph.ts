@@ -14,6 +14,8 @@ export interface WorkflowGraphNode {
 	parentIds: string[]
 	childIds: string[]
 	events: ChatTraceEvent[]
+	checkpointHash?: string
+	checkpointTs?: number
 }
 
 const UNKNOWN_TASK_ID = "unknown-task"
@@ -29,6 +31,8 @@ interface TaskTimeline {
 	messages: ClineMessage[]
 	stepCounter: number
 	lastSnapshot?: WorkflowGraphNode
+	lastCheckpointHash?: string
+	lastCheckpointTs?: number
 }
 
 interface ForwardedMessagePayload {
@@ -43,6 +47,20 @@ function ensureString(value: unknown): string | undefined {
 
 function isMessagePayload(value: unknown): value is ForwardedMessagePayload {
 	return typeof value === "object" && value !== null && "message" in value
+}
+
+function extractCheckpointHash(message: ClineMessage): { hash: string; ts: number } | undefined {
+	const checkpointRecord = message.checkpoint as Record<string, unknown> | undefined
+	const hashFromCheckpoint = checkpointRecord
+		? ensureString(checkpointRecord.hash) || ensureString(checkpointRecord.to)
+		: undefined
+	if (hashFromCheckpoint) {
+		return { hash: hashFromCheckpoint, ts: message.ts }
+	}
+	if (message.say === "checkpoint_saved" && message.text) {
+		return { hash: message.text, ts: message.ts }
+	}
+	return undefined
 }
 
 export function buildWorkflowNodesFromTaskEvents(events: ReceivedTaskEvent[]): WorkflowGraphNode[] {
@@ -84,6 +102,8 @@ export function buildWorkflowNodesFromTaskEvents(events: ReceivedTaskEvent[]): W
 			parentIds: Array.from(timeline.parentIds),
 			childIds: Array.from(timeline.childIds),
 			events: buildChatEventTrace(timeline.messages),
+			checkpointHash: timeline.lastCheckpointHash,
+			checkpointTs: timeline.lastCheckpointTs,
 		}
 		timeline.lastSnapshot = node
 		snapshots.push({ node, order: sequence++, timestamp: completedAt ?? timestamp ?? 0 })
@@ -125,6 +145,14 @@ export function buildWorkflowNodesFromTaskEvents(events: ReceivedTaskEvent[]): W
 					primaryNode.messages.push(payload.message)
 					if (!primaryNode.label && payload.message.ask) {
 						primaryNode.label = payload.message.ask
+					}
+					const checkpointInfo = extractCheckpointHash(payload.message)
+					if (checkpointInfo) {
+						primaryNode.lastCheckpointHash = checkpointInfo.hash
+						primaryNode.lastCheckpointTs = checkpointInfo.ts
+					}
+					if (payload.message.say === "checkpoint_saved") {
+						break
 					}
 					const messageTimestamp = payload.message.ts ?? event.taskEventTimestamp
 					if (!primaryNode.startedAt) {

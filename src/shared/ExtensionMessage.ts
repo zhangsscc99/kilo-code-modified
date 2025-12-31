@@ -87,6 +87,12 @@ export interface WebviewTaskEvent {
 	taskIdentifier?: string
 }
 
+export interface WorkflowNodeRestoreResultPayload {
+	snapshotId: string
+	status: "success" | "error"
+	error?: string
+}
+
 // Represents JSON data that is sent from extension to webview, called
 // ExtensionMessage and has 'type' enum which can be 'plusButtonClicked' or
 // 'settingsButtonClicked' or 'hello'. Webview will hold state.
@@ -205,6 +211,7 @@ export interface ExtensionMessage {
 		| "deviceAuthCancelled" // kilocode_change: Device auth cancelled
 		| "chatCompletionResult" // kilocode_change: FIM completion result for chat text area
 		| "taskEvent"
+		| "workflowNodeRestoreResult"
 	text?: string
 	// kilocode_change start
 	completionRequestId?: string // Correlation ID from request
@@ -216,8 +223,10 @@ export interface ExtensionMessage {
 		| TasksByIdResponsePayload
 		| TaskHistoryResponsePayload
 		| [string, string] // For file save events [taskId, filePath]
+		| WorkflowNodeRestoreResultPayload
 	taskEvent?: WebviewTaskEvent
 	taskEventTimestamp?: number
+	workflowRestoreResult?: WorkflowNodeRestoreResultPayload
 	// kilocode_change end
 	// Checkpoint warning message
 	checkpointWarning?: {

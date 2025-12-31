@@ -42,7 +42,7 @@ import { saveTaskMessages } from "../task-persistence"
 
 import { ClineProvider } from "./ClineProvider"
 import { BrowserSessionPanelManager } from "./BrowserSessionPanelManager"
-import { handleCheckpointRestoreOperation } from "./checkpointRestoreHandler"
+import { handleCheckpointRestoreOperation, waitForClineInitialization } from "./checkpointRestoreHandler"
 import { changeLanguage, t } from "../../i18n"
 import { Package } from "../../shared/package"
 import { type RouterName, type ModelRecord, toRouterName } from "../../shared/api"
@@ -54,6 +54,7 @@ import {
 	checkoutDiffPayloadSchema,
 	checkoutRestorePayloadSchema,
 	requestCheckpointRestoreApprovalPayloadSchema,
+	workflowNodeRestorePayloadSchema,
 } from "../../shared/WebviewMessage"
 import { checkExistKey } from "../../shared/checkExistApiConfig"
 import { experimentDefault } from "../../shared/experiments"
@@ -1276,6 +1277,78 @@ export const webviewMessageHandler = async (
 					message.payload as TaskHistoryRequestPayload,
 				),
 			})
+			break
+		}
+		case "workflowNodeRestore": {
+			const parsed = workflowNodeRestorePayloadSchema.safeParse(message.payload)
+			const fallbackSnapshotId =
+				typeof (message.payload as any)?.snapshotId === "string"
+					? ((message.payload as any).snapshotId as string)
+					: undefined
+
+			const publishResult = async (snapshotId: string, status: "success" | "error", error?: string) => {
+				const resultPayload = {
+					snapshotId,
+					status,
+					error,
+				}
+				await provider.postMessageToWebview({
+					type: "workflowNodeRestoreResult",
+					workflowRestoreResult: resultPayload,
+					payload: resultPayload,
+				})
+			}
+
+			if (!parsed.success) {
+				if (fallbackSnapshotId) {
+					await publishResult(fallbackSnapshotId, "error", "Invalid workflow restore payload")
+				}
+				break
+			}
+
+			const payload = parsed.data
+			try {
+				let activeTask = provider.getCurrentTask()
+				if (!activeTask || activeTask.taskId !== payload.taskId) {
+					await provider.showTaskWithId(payload.taskId)
+					activeTask = provider.getCurrentTask()
+				}
+
+				if (!activeTask || activeTask.taskId !== payload.taskId) {
+					throw new Error(`无法定位任务 ${payload.taskId}`)
+				}
+
+				const checkpointTimestamp =
+					payload.checkpointTs ??
+					findCheckpointTimestampForHash(activeTask.clineMessages, payload.checkpointHash)
+
+				if (!checkpointTimestamp) {
+					throw new Error("找不到对应的 checkpoint 记录")
+				}
+
+				await provider.cancelTask()
+				const initialized = await waitForClineInitialization(provider)
+				if (!initialized) {
+					throw new Error(t("common:errors.checkpoint_timeout"))
+				}
+
+				const taskToRestore = provider.getCurrentTask()
+				if (!taskToRestore) {
+					throw new Error("任务尚未初始化")
+				}
+
+				await taskToRestore.checkpointRestore({
+					ts: checkpointTimestamp,
+					commitHash: payload.checkpointHash,
+					mode: "restore",
+				})
+
+				await publishResult(payload.snapshotId, "success")
+			} catch (error) {
+				const errorMessage = error instanceof Error ? error.message : String(error)
+				await publishResult(payload.snapshotId, "error", errorMessage)
+			}
+
 			break
 		}
 		// kilocode_change end
@@ -4278,4 +4351,28 @@ export const webviewMessageHandler = async (
 			break
 		}
 	}
+}
+
+function findCheckpointTimestampForHash(messages: ClineMessage[] | undefined, hash: string): number | undefined {
+	if (!messages || !hash) {
+		return undefined
+	}
+
+	for (let index = messages.length - 1; index >= 0; index -= 1) {
+		const message = messages[index]
+		if (!message) {
+			continue
+		}
+
+		if (message.say === "checkpoint_saved" && message.text === hash) {
+			return message.ts
+		}
+
+		const checkpointRecord = message.checkpoint as { hash?: string; to?: string } | undefined
+		if (checkpointRecord?.hash === hash || checkpointRecord?.to === hash) {
+			return message.ts
+		}
+	}
+
+	return undefined
 }

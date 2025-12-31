@@ -48,6 +48,7 @@
 
 - 长期目标是做到“点击任意节点 → 展开详情 → 在该节点状态基础上继续聊天并生成新的分支”，类似游戏回档。实现前提：节点必须绑定真实的 `taskId`/`checkpointId`，点击后可调用扩展端已有的 checkpoint 恢复逻辑。
 - 这也是为何推荐接入 TaskEvent：一旦 DAG 基于真实的任务事件构建，节点就天然对应具体 task，可与文件系统 checkpoint、聊天记录 checkpoint、agent memory 同步回档。也方便在 UI 中展示“来自 triage agent 的分支”之类的交互。
+- 实际交互会是：如果节点链路为 1→2→3→4→5，用户点击第 3 个节点，就触发 checkpoint 恢复，把聊天记录、agent memory、文件系统都回溯到那一刻；此后继续与 agent 交互所生成的内容会在 Workflow 上从第 3 节点开始另起一条分支，原有的 4、5 节点依然保留，用户可以在任一分支的任意节点继续回档、再分叉，形成一个真正的多分支 DAG。
 
 ### 当前阶段的实施计划（不含回档）
 
@@ -60,3 +61,56 @@
 4. **文档 / 测试**：记录 TaskEvent 接入方式，确保 WorkflowPanel 的渲染测试基于模拟 TaskEvent，而不是 `clineMessages`。
 
 未来在此基础上再接入“节点回档 + 继续推演”，届时只需在节点详情中添加回档入口，并复用已有的 `taskId` 元数据。
+
+### 回档分阶段计划
+
+1. **阶段一：回档交互骨架**
+   - WorkflowPanel 节点详情中加入“回到此节点”按钮，点击后仅在前端提示并发送一个新的 `workflowNodeRestoreRequest`（暂不真正回档）。
+   - 在 webview → 扩展端的消息通道里预留 `workflowNodeRestore` 类型，扩展端先简单记录日志/回显，确保后续可以串接。
+
+2. **阶段二：Checkpoint 恢复串联**
+   - 扩展端收到 `workflowNodeRestore` 后，根据传入的 `taskId`/`step` 查找对应 checkpoint，调用现有 `checkpointRestore` 逻辑恢复聊天记录、文件系统、agent 状态。
+   - 恢复完成后发送 `workflowNodeRestoreResult` 返回给 webview；webview 则刷新视图、提示当前所在节点/分支，失败时给出错误提示。
+
+3. **阶段三：分支管理**
+   - 回档后继续对话时，为该节点创建新的分支（新的 taskId 或子 taskId），在 Workflow 中形成立体的 DAG，原有分支不消失。
+   - UI 支持分支标识/切换，使用户能在多条分支之间随时回档、继续、对比。
+
+
+实际完整实现
+好的 我之后需要搞的东西 知道吗。目前agent有agent快照 对吧 这个其实是和我们已经有的checkpoint后端逻辑协同配合的
+▌ 就是我们如果在可视化界面回溯agentnode 是能同步restore文件系统和聊天记录的checkpoint的
+
+> 是的，Agent 快照本质上就是把 TaskEvent 节点和扩展端已有的 checkpoint（文件系统、聊天记录、agent memory）对应起
+  来。下一步就是把 Workflow 上的节点点击和 taskId 关联的 checkpoint 恢复 API 串起来：
+
+  - 节点点回去 → 前端发消息带上 taskId → 扩展端调用 checkpoint 恢复逻辑（文件/聊天/记忆同步回到当时状态）。
+  - 恢复后 UI 重新渲染对应的聊天上下文，就能继续在那条分支上推演。
+
+  这样 Workflow 面板不仅能展示 DAG，还能真正“回溯 + 继续推演”，和现有后端 checkpoint 体系完全协同。
+
+▌ 但我其实细化的需求想这样 比如我有5个节点 我想回到第三个节点 那么这时候第三个节点我回溯回去 就会聊天记录回到那时
+▌ 候 文件系统也是 agent上下文也是。这时候新的生成链路会新开一个分支 生成agent节点。但同时 原先那个agent分支也并没
+▌ 有消失 我也可以同样回溯回去 你懂吗 帮我理解并整理这一块需求
+
+> 我理解你的需求是：Workflow 里的每个节点其实都是一个“时间点快照”。如果当前链路有 5 个节点，你点击第 3 个节点：
+
+  1. 全状态回溯：扩展端需要用这个节点的 taskId 去恢复对应的 checkpoint——聊天记录回滚到当时的对话，文件系统恢复到那
+  次改动前后，agent 内部记忆也回到那一刻。这本质上利用现有 checkpoint 后端逻辑。
+  2. 继续推演时分叉：回溯之后你再跟 agent 继续对话，新的输出不应该覆盖原来第 4、5 节点，而是从第 3 节点“另起一条分
+  支”往前生成。这样 Workflow 会出现两条链：原始链（1→2→3→4→5）仍然存在；新生成的链可能是 1→2→3→3a→3b…，你可以在 UI
+  里看到并在它们之间切换。
+  3. 多分支可反复回溯：无论是老分支还是新分支的任意节点，都能随时再点击回溯，恢复对应 checkpoint，再继续生成另一条
+  分支。也就是说 Workflow 实际上是一个多分支树，节点回溯不会丢失历史链，而是允许你从任意节点“复制+继续”。
+
+  整理下来就是：
+
+  - 节点绑定真实 checkpoint，点击时执行“聊天/文件/记忆三件套”的恢复。
+  - 每次回溯后继续生成时，系统在 Workflow 上新增一条从该节点出发的分支，而不是覆盖原链。
+  - 所有分支都保留在 DAG 中，用户可以来回回溯、切换并发分支。
+
+  这样 Workflow 面板就成了 checkpoint 管理、分支探索的可视化入口。
+
+▌ Summarize recent commits
+
+⏎ send   ⌃J newline   ⌃T transcript   ⌃C quit   4.18M tokens used   29% context left

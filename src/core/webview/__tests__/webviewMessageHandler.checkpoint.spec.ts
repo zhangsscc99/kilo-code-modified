@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest"
 import { webviewMessageHandler } from "../webviewMessageHandler"
 import { saveTaskMessages } from "../../task-persistence"
-import { handleCheckpointRestoreOperation } from "../checkpointRestoreHandler"
+import { handleCheckpointRestoreOperation, waitForClineInitialization } from "../checkpointRestoreHandler"
 import { MessageManager } from "../../message-manager"
 
 // Mock dependencies
@@ -64,6 +64,9 @@ describe("webviewMessageHandler - checkpoint operations", () => {
 				globalStorageUri: { fsPath: "/test/storage" },
 			},
 		}
+		mockProvider.cancelTask = vi.fn().mockResolvedValue(undefined)
+		mockProvider.showTaskWithId = vi.fn().mockResolvedValue(undefined)
+		;(waitForClineInitialization as vi.Mock).mockResolvedValue(true)
 	})
 
 	describe("delete operations with checkpoint restoration", () => {
@@ -136,6 +139,58 @@ describe("webviewMessageHandler - checkpoint operations", () => {
 					apiConversationHistoryIndex: 0,
 				},
 			})
+		})
+	})
+
+	describe("workflow node restore", () => {
+		it("restores checkpoint and notifies webview", async () => {
+			const payload = {
+				type: "workflowNodeRestore" as const,
+				payload: {
+					snapshotId: "test-task-123#2",
+					taskId: "test-task-123",
+					checkpointHash: "abc123",
+					checkpointTs: 2,
+				},
+			}
+
+			await webviewMessageHandler(mockProvider, payload)
+
+			expect(mockProvider.cancelTask).toHaveBeenCalled()
+			expect(waitForClineInitialization).toHaveBeenCalledWith(mockProvider)
+			expect(mockCline.checkpointRestore).toHaveBeenCalledWith({
+				ts: 2,
+				commitHash: "abc123",
+				mode: "restore",
+			})
+			expect(mockProvider.postMessageToWebview).toHaveBeenCalledWith(
+				expect.objectContaining({
+					type: "workflowNodeRestoreResult",
+					workflowRestoreResult: expect.objectContaining({ status: "success", snapshotId: "test-task-123#2" }),
+				}),
+			)
+		})
+
+		it("returns error when task cannot be located", async () => {
+			mockProvider.getCurrentTask = vi.fn(() => undefined)
+			mockProvider.showTaskWithId = vi.fn().mockRejectedValue(new Error("Task not found"))
+
+			await webviewMessageHandler(mockProvider, {
+				type: "workflowNodeRestore",
+				payload: {
+					snapshotId: "missing",
+					taskId: "unknown",
+					checkpointHash: "zzz",
+				},
+			})
+
+			expect(mockProvider.cancelTask).not.toHaveBeenCalled()
+			expect(mockProvider.postMessageToWebview).toHaveBeenCalledWith(
+				expect.objectContaining({
+					type: "workflowNodeRestoreResult",
+					workflowRestoreResult: expect.objectContaining({ status: "error", snapshotId: "missing" }),
+				}),
+			)
 		})
 	})
 })

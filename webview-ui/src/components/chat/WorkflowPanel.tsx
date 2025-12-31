@@ -7,6 +7,7 @@ import { buildChatEventTrace, type ChatEventType } from "./ChatEventTrace"
 import { cn } from "@/lib/utils"
 import { buildWorkflowNodesFromTaskEvents, type WorkflowGraphNode } from "@/utils/taskEventGraph"
 import type { ReceivedTaskEvent } from "@/types/taskEvents"
+import type { WorkflowNodeRestoreRequest, WorkflowRestoreState } from "@/types/workflow"
 
 interface AgentStateSummary {
 	statusLabel: string
@@ -24,6 +25,8 @@ interface WorkflowPanelProps {
 	onToggleCollapse: () => void
 	onClose: () => void
 	agentState: AgentStateSummary
+	workflowRestoreState: WorkflowRestoreState
+	onRequestRestoreNode: (payload: WorkflowNodeRestoreRequest) => void
 }
 
 const tabs = [
@@ -34,7 +37,16 @@ const tabs = [
 
 type TabKey = (typeof tabs)[number]["key"]
 
-export function WorkflowPanel({ messages, taskEvents, collapsed, onToggleCollapse, onClose, agentState }: WorkflowPanelProps) {
+export function WorkflowPanel({
+	messages,
+	taskEvents,
+	collapsed,
+	onToggleCollapse,
+	onClose,
+	agentState,
+	workflowRestoreState,
+	onRequestRestoreNode,
+}: WorkflowPanelProps) {
 	const messageEvents = useMemo(() => buildChatEventTrace(messages), [messages])
 	const workflowNodes = useMemo<WorkflowGraphNode[]>(
 		() => buildWorkflowNodesFromTaskEvents(taskEvents),
@@ -69,6 +81,22 @@ export function WorkflowPanel({ messages, taskEvents, collapsed, onToggleCollaps
 		}
 	}, [workflowNodes, activeNodeId])
 	const [activeTab, setActiveTab] = useState<TabKey>("workflow")
+
+	const handleRestoreNode = useCallback(
+		(node: WorkflowGraphNode) => {
+			if (!node.checkpointHash) {
+				return
+			}
+			onRequestRestoreNode({
+				snapshotId: node.id,
+				taskId: node.taskId,
+				stepIndex: node.stepIndex,
+				checkpointHash: node.checkpointHash,
+				checkpointTs: node.checkpointTs,
+			})
+		},
+		[onRequestRestoreNode],
+	)
 
 	if (collapsed) {
 		return (
@@ -190,6 +218,13 @@ const startResize = (mode: "horizontal" | "vertical" | "both") => (event: ReactP
 								const isActive = activeNodeId === node.id
 								const displayIndex = node.stepIndex ?? idx + 1
 								const nodeTitle = node.label || node.taskId
+								const isPendingRestore = workflowRestoreState.pendingSnapshotId === node.id
+								const isLastRestored = workflowRestoreState.lastSnapshotId === node.id
+								const isRestoreSuccess = workflowRestoreState.status === "success" && isLastRestored
+								const restoreError =
+									workflowRestoreState.status === "error" && isLastRestored
+										? workflowRestoreState.error
+										: undefined
 								return (
 									<div key={node.id} className="relative mb-4 last:mb-0">
 										<svg className="absolute left-0 top-0" width="16" height="100%">
@@ -219,7 +254,38 @@ const startResize = (mode: "horizontal" | "vertical" | "both") => (event: ReactP
 										</button>
 										{isActive && (
 											<div className="ml-6 mt-2 w-[88%] rounded-xl border border-vscode-panel-border bg-[color-mix(in_srgb,var(--vscode-editor-background)_96%,var(--vscode-panel-border))] p-3 text-xs">
-												<p className="mb-2 text-vscode-descriptionForeground">内部事件</p>
+												<div className="mb-2 flex flex-col gap-1">
+													<span className="text-[11px] text-vscode-descriptionForeground">
+														{node.checkpointHash
+															? `Checkpoint: ${formatCheckpointHash(node.checkpointHash)}`
+															: "暂无可用 checkpoint"}
+													</span>
+													<div className="flex items-center justify-between">
+														<p className="text-[10px] text-vscode-descriptionForeground mb-0">内部事件</p>
+														<button
+															className={cn(
+																"rounded border px-2 py-1 text-[11px]",
+																node.checkpointHash
+																	? "border-[var(--vscode-textLink-foreground)] text-vscode-editor-foreground"
+																	: "cursor-not-allowed border-vscode-panel-border text-vscode-descriptionForeground",
+															)}
+															disabled={!node.checkpointHash || isPendingRestore}
+															onClick={(evt) => {
+																evt.stopPropagation()
+																handleRestoreNode(node)
+															}}
+														>
+															{isPendingRestore ? "回溯中…" : "回到此节点"}
+														</button>
+													</div>
+													{restoreError && (
+														<p className="text-[11px] text-vscode-errorForeground">恢复失败：{restoreError}</p>
+													)}
+													{isRestoreSuccess && (
+														<p className="text-[11px] text-vscode-descriptionForeground">已恢复到该节点</p>
+													)}
+												</div>
+												{node.events.length === 0 && <p className="text-vscode-descriptionForeground">无工具/Hook 活动</p>}
 												{node.events.length === 0 && <p className="text-vscode-descriptionForeground">无工具/Hook 活动</p>}
 												{node.events.map((event) => (
 													<div key={event.id} className="mb-2 last:mb-0">
@@ -373,4 +439,9 @@ function formatTimestamp(ts?: number) {
 	if (!ts) return "-"
 	const date = new Date(ts)
 	return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+}
+
+function formatCheckpointHash(hash?: string) {
+	if (!hash) return "-"
+	return hash.length > 8 ? hash.slice(0, 8) : hash
 }

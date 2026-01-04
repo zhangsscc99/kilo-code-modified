@@ -52,6 +52,8 @@ describe("webviewMessageHandler - checkpoint operations", () => {
 		mockCline.messageManager = new MessageManager(mockCline)
 
 		// Setup mock provider
+		mockCline.isInitialized = true
+
 		mockProvider = {
 			getCurrentTask: vi.fn(() => mockCline),
 			postMessageToWebview: vi.fn(),
@@ -63,6 +65,9 @@ describe("webviewMessageHandler - checkpoint operations", () => {
 			contextProxy: {
 				globalStorageUri: { fsPath: "/test/storage" },
 			},
+			showTaskWithId: vi.fn(() => Promise.resolve()),
+			cancelTask: vi.fn(() => Promise.resolve()),
+			postStateToWebview: vi.fn(() => Promise.resolve()),
 		}
 	})
 
@@ -134,6 +139,66 @@ describe("webviewMessageHandler - checkpoint operations", () => {
 					editedContent: "Edited checkpoint message",
 					images: undefined,
 					apiConversationHistoryIndex: 0,
+				},
+			})
+		})
+	})
+
+	describe("workflow node restore", () => {
+		it("restores checkpoint for workflow nodes", async () => {
+			await webviewMessageHandler(mockProvider, {
+				type: "workflowNodeRestore",
+				payload: {
+					snapshotId: "test-task-123#1",
+					taskId: "test-task-123",
+					snapshotTs: 3,
+					checkpointHash: "abc123",
+					checkpointTs: 2,
+					strategy: "checkpoint-only",
+				},
+			})
+
+			expect(mockProvider.showTaskWithId).toHaveBeenCalledWith("test-task-123")
+			expect(mockProvider.cancelTask).toHaveBeenCalled()
+			expect(mockCline.checkpointRestore).toHaveBeenCalledWith({
+				ts: 2,
+				commitHash: "abc123",
+				mode: "restore",
+			})
+			expect(mockProvider.postMessageToWebview).toHaveBeenCalledWith({
+				type: "workflowNodeRestoreResult",
+				workflowNodeRestoreResult: {
+					snapshotId: "test-task-123#1",
+					status: "success",
+					mode: "conversation",
+					strategy: "checkpoint-only",
+				},
+			})
+		})
+
+		it("returns an error when checkpoint timestamp cannot be resolved", async () => {
+			await webviewMessageHandler(mockProvider, {
+				type: "workflowNodeRestore",
+				payload: {
+					snapshotId: "test-task-123#2",
+					taskId: "test-task-123",
+					snapshotTs: 5,
+					checkpointHash: "missing",
+					strategy: "checkpoint-only",
+				},
+			})
+
+			expect(mockProvider.showTaskWithId).toHaveBeenCalledWith("test-task-123")
+			expect(mockProvider.cancelTask).not.toHaveBeenCalled()
+			expect(mockCline.checkpointRestore).not.toHaveBeenCalled()
+			expect(mockProvider.postMessageToWebview).toHaveBeenCalledWith({
+				type: "workflowNodeRestoreResult",
+				workflowNodeRestoreResult: {
+					snapshotId: "test-task-123#2",
+					status: "error",
+					mode: "conversation",
+					strategy: "checkpoint-only",
+					error: "Checkpoint not found for selected node",
 				},
 			})
 		})

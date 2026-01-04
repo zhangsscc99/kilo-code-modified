@@ -30,6 +30,7 @@ import {
 	BalanceDataResponsePayload,
 	TaskHistoryResponsePayload,
 	TasksByIdResponsePayload,
+	WorkflowNodeRestoreResultPayload,
 } from "./WebviewMessage"
 import { ClineRulesToggles } from "./cline-rules"
 import { KiloCodeWrapperProperties } from "./kilocode/wrapper"
@@ -205,6 +206,7 @@ export interface ExtensionMessage {
 		| "deviceAuthCancelled" // kilocode_change: Device auth cancelled
 		| "chatCompletionResult" // kilocode_change: FIM completion result for chat text area
 		| "taskEvent"
+		| "workflowNodeRestoreResult"
 	text?: string
 	// kilocode_change start
 	completionRequestId?: string // Correlation ID from request
@@ -218,6 +220,7 @@ export interface ExtensionMessage {
 		| [string, string] // For file save events [taskId, filePath]
 	taskEvent?: WebviewTaskEvent
 	taskEventTimestamp?: number
+	workflowNodeRestoreResult?: WorkflowNodeRestoreResultPayload
 	// kilocode_change end
 	// Checkpoint warning message
 	checkpointWarning?: {

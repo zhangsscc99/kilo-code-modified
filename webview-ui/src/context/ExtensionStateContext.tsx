@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useEffect, useState } from "react"
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from "react"
 
 import {
 	type ProviderSettings,
@@ -17,6 +17,7 @@ import {
 } from "@roo-code/types"
 
 import { ExtensionMessage, ExtensionState, MarketplaceInstalledMetadata, Command } from "@roo/ExtensionMessage"
+import { WorkflowNodeRestorePayload } from "@roo/WebviewMessage"
 import { findLastIndex } from "@roo/array"
 import { McpServer } from "@roo/mcp"
 import { checkExistKey } from "@roo/checkExistApiConfig"
@@ -30,6 +31,17 @@ import { vscode } from "@src/utils/vscode"
 import { convertTextMateToHljs } from "@src/utils/textMateToHljs"
 import { ClineRulesToggles } from "@roo/cline-rules" // kilocode_change
 import type { ReceivedTaskEvent } from "@/types/taskEvents"
+
+interface WorkflowRestoreErrorState {
+	snapshotId: string
+	message: string
+}
+
+export interface WorkflowRestoreStateSnapshot {
+	pendingSnapshotId: string | null
+	lastCompletedSnapshotId: string | null
+	lastError: WorkflowRestoreErrorState | null
+}
 
 export interface ExtensionStateContextType extends ExtensionState {
 	historyPreviewCollapsed?: boolean
@@ -80,6 +92,8 @@ export interface ExtensionStateContextType extends ExtensionState {
 	// kilocode_change start
 	commands: Command[]
 	taskEvents: ReceivedTaskEvent[]
+	workflowRestoreState: WorkflowRestoreStateSnapshot
+	requestWorkflowNodeRestore: (payload: WorkflowNodeRestorePayload) => void
 	organizationAllowList: OrganizationAllowList
 	organizationSettingsVersion: number
 	cloudIsAuthenticated: boolean
@@ -368,6 +382,12 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 	const [openedTabs, setOpenedTabs] = useState<Array<{ label: string; isActive: boolean; path?: string }>>([])
 	const [commands, setCommands] = useState<Command[]>([])
 	const [taskEvents, setTaskEvents] = useState<ReceivedTaskEvent[]>([])
+	const [workflowRestoreState, setWorkflowRestoreState] = useState<WorkflowRestoreStateSnapshot>({
+		pendingSnapshotId: null,
+		lastCompletedSnapshotId: null,
+		lastError: null,
+	})
+	const workflowRestoreRequestsRef = useRef<Record<string, WorkflowNodeRestorePayload>>({})
 	const [mcpServers, setMcpServers] = useState<McpServer[]>([])
 	const [mcpMarketplaceCatalog, setMcpMarketplaceCatalog] = useState<McpMarketplaceCatalog>({ items: [] }) // kilocode_change
 	const [currentCheckpoint, setCurrentCheckpoint] = useState<string>()
@@ -403,6 +423,16 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 				...value,
 			},
 		}))
+	}, [])
+
+	const requestWorkflowNodeRestore = useCallback((payload: WorkflowNodeRestorePayload) => {
+		workflowRestoreRequestsRef.current[payload.snapshotId] = payload
+		setWorkflowRestoreState({
+			pendingSnapshotId: payload.snapshotId,
+			lastCompletedSnapshotId: null,
+			lastError: null,
+		})
+		vscode.postMessage({ type: "workflowNodeRestore", payload })
 	}, [])
 
 	const handleMessage = useCallback(
@@ -480,6 +510,34 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 							taskEventTimestamp: message.taskEventTimestamp ?? Date.now(),
 						}
 						setTaskEvents((prev) => [...prev, eventPayload].slice(-500))
+					}
+					break
+				}
+				case "workflowNodeRestoreResult": {
+					const result = message.workflowNodeRestoreResult
+					if (result) {
+						const storedPayload = workflowRestoreRequestsRef.current[result.snapshotId]
+						delete workflowRestoreRequestsRef.current[result.snapshotId]
+						setWorkflowRestoreState({
+							pendingSnapshotId: null,
+							lastCompletedSnapshotId: result.status === "success" ? result.snapshotId : null,
+							lastError:
+								result.status === "error"
+									? { snapshotId: result.snapshotId, message: result.error ?? "恢复失败" }
+									: null,
+						})
+						if (result.status === "success" && storedPayload) {
+							const cutoffTs = storedPayload.checkpointTs ?? storedPayload.snapshotTs
+							if (cutoffTs) {
+								setTaskEvents((prev) => prev.filter((event) => event.taskEventTimestamp <= cutoffTs))
+								setState((prevState) => ({
+									...prevState,
+									clineMessages: prevState.clineMessages.filter(
+										(clineMessage) => !clineMessage.ts || clineMessage.ts <= cutoffTs,
+									),
+								}))
+							}
+						}
 					}
 					break
 				}
@@ -583,6 +641,8 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 		// kilocode_change end
 		commands,
 		taskEvents,
+		workflowRestoreState,
+		requestWorkflowNodeRestore,
 		soundVolume: state.soundVolume,
 		ttsSpeed: state.ttsSpeed,
 		fuzzyMatchThreshold: state.fuzzyMatchThreshold,

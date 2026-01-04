@@ -7,6 +7,8 @@ import { buildChatEventTrace, type ChatEventType } from "./ChatEventTrace"
 import { cn } from "@/lib/utils"
 import { buildWorkflowNodesFromTaskEvents, type WorkflowGraphNode } from "@/utils/taskEventGraph"
 import type { ReceivedTaskEvent } from "@/types/taskEvents"
+import type { WorkflowNodeRestorePayload } from "@roo/WebviewMessage"
+import type { WorkflowRestoreStateSnapshot } from "@/context/ExtensionStateContext"
 
 interface AgentStateSummary {
 	statusLabel: string
@@ -24,6 +26,9 @@ interface WorkflowPanelProps {
 	onToggleCollapse: () => void
 	onClose: () => void
 	agentState: AgentStateSummary
+	currentCheckpoint?: string
+	workflowRestoreState: WorkflowRestoreStateSnapshot
+	onRestoreNode: (payload: WorkflowNodeRestorePayload) => void
 }
 
 const tabs = [
@@ -34,19 +39,32 @@ const tabs = [
 
 type TabKey = (typeof tabs)[number]["key"]
 
-export function WorkflowPanel({ messages, taskEvents, collapsed, onToggleCollapse, onClose, agentState }: WorkflowPanelProps) {
+export function WorkflowPanel({
+	messages,
+	taskEvents,
+	collapsed,
+	onToggleCollapse,
+	onClose,
+	agentState,
+	currentCheckpoint,
+	workflowRestoreState,
+	onRestoreNode,
+}: WorkflowPanelProps) {
 	const messageEvents = useMemo(() => buildChatEventTrace(messages), [messages])
-	const workflowNodes = useMemo<WorkflowGraphNode[]>(
-		() => buildWorkflowNodesFromTaskEvents(taskEvents),
-		[taskEvents],
-	)
+	const workflowNodes = useMemo<WorkflowGraphNode[]>(() => buildWorkflowNodesFromTaskEvents(taskEvents), [taskEvents])
 	const eventList = useMemo(() => messageEvents, [messageEvents])
 	const [agentStateHistory, setAgentStateHistory] = useState<AgentStateSummary[]>([])
 	const [activeNodeId, setActiveNodeId] = useState<string | null>(null)
 	const DEFAULT_WIDTH = Math.round(420 * 1.3)
 	const DEFAULT_HEIGHT = Math.round(420 * 1.3)
 	const [panelSize, setPanelSize] = useState({ width: DEFAULT_WIDTH, height: DEFAULT_HEIGHT })
-	const resizeState = useRef<{ startX: number; startY: number; startWidth: number; startHeight: number; mode: "horizontal" | "vertical" | "both" } | null>(null)
+	const resizeState = useRef<{
+		startX: number
+		startY: number
+		startWidth: number
+		startHeight: number
+		mode: "horizontal" | "vertical" | "both"
+	} | null>(null)
 	useEffect(() => {
 		setAgentStateHistory((prev) => {
 			const next = [...prev]
@@ -94,22 +112,25 @@ export function WorkflowPanel({ messages, taskEvents, collapsed, onToggleCollaps
 
 	const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max)
 
-	const updateSize = useCallback(
-		(event: PointerEvent) => {
-			const state = resizeState.current
-			if (!state) return
-			const deltaX = event.clientX - state.startX
-			const deltaY = event.clientY - state.startY
-			const viewportWidth = typeof window !== "undefined" ? window.innerWidth : 1024
-			const viewportHeight = typeof window !== "undefined" ? window.innerHeight : 768
-			setPanelSize((prev) => {
-				const nextWidth = state.mode === "vertical" ? prev.width : clamp(state.startWidth + deltaX, 320, Math.min(viewportWidth - 48, 960))
-				const nextHeight = state.mode === "horizontal" ? prev.height : clamp(state.startHeight + deltaY, 260, Math.min(viewportHeight - 120, viewportHeight * 0.9))
-				return { width: nextWidth, height: nextHeight }
-			})
-		},
-		[],
-	)
+	const updateSize = useCallback((event: PointerEvent) => {
+		const state = resizeState.current
+		if (!state) return
+		const deltaX = event.clientX - state.startX
+		const deltaY = event.clientY - state.startY
+		const viewportWidth = typeof window !== "undefined" ? window.innerWidth : 1024
+		const viewportHeight = typeof window !== "undefined" ? window.innerHeight : 768
+		setPanelSize((prev) => {
+			const nextWidth =
+				state.mode === "vertical"
+					? prev.width
+					: clamp(state.startWidth + deltaX, 320, Math.min(viewportWidth - 48, 960))
+			const nextHeight =
+				state.mode === "horizontal"
+					? prev.height
+					: clamp(state.startHeight + deltaY, 260, Math.min(viewportHeight - 120, viewportHeight * 0.9))
+			return { width: nextWidth, height: nextHeight }
+		})
+	}, [])
 
 	const stopResize = useCallback(() => {
 		resizeState.current = null
@@ -117,7 +138,7 @@ export function WorkflowPanel({ messages, taskEvents, collapsed, onToggleCollaps
 		window.removeEventListener("pointerup", stopResize)
 	}, [updateSize])
 
-const startResize = (mode: "horizontal" | "vertical" | "both") => (event: ReactPointerEvent<HTMLDivElement>) => {
+	const startResize = (mode: "horizontal" | "vertical" | "both") => (event: ReactPointerEvent<HTMLDivElement>) => {
 		event.preventDefault()
 		event.stopPropagation()
 		resizeState.current = {
@@ -137,8 +158,13 @@ const startResize = (mode: "horizontal" | "vertical" | "both") => (event: ReactP
 		<div className="fixed bottom-28 right-4 z-40 text-sm">
 			<div
 				className="relative rounded-2xl border border-vscode-panel-border bg-[var(--vscode-editor-background)] shadow-2xl"
-				style={{ width: panelSize.width, height: panelSize.height, maxHeight: "75vh", padding: "0.85rem", overflow: "auto" }}
-			>
+				style={{
+					width: panelSize.width,
+					height: panelSize.height,
+					maxHeight: "75vh",
+					padding: "0.85rem",
+					overflow: "auto",
+				}}>
 				<header className="mb-4 space-y-3">
 					<div className="flex items-start gap-2">
 						<div>
@@ -183,19 +209,63 @@ const startResize = (mode: "horizontal" | "vertical" | "both") => (event: ReactP
 						</div>
 						<div className="relative pl-6">
 							<div className="absolute left-1 top-0 bottom-2 w-px bg-[color-mix(in_srgb,var(--vscode-editor-background)_40%,var(--vscode-panel-border))]" />
-							{workflowNodes.length === 0 && <p className="text-xs text-vscode-descriptionForeground">暂无数据</p>}
+							{workflowNodes.length === 0 && (
+								<p className="text-xs text-vscode-descriptionForeground">暂无 checkpoint 数据</p>
+							)}
 							{workflowNodes.map((node, idx) => {
 								const stroke = getNodeColor(node)
-								const duration = node.startedAt && node.completedAt ? node.completedAt - node.startedAt : undefined
+								const duration =
+									node.startedAt && node.completedAt ? node.completedAt - node.startedAt : undefined
 								const isActive = activeNodeId === node.id
 								const displayIndex = node.stepIndex ?? idx + 1
 								const nodeTitle = node.label || node.taskId
+								const canRestore = Boolean(node.supportsCheckpointRestore && node.checkpoint)
+								const isPendingRestore = workflowRestoreState.pendingSnapshotId === node.id
+								const recentRestore = workflowRestoreState.lastCompletedSnapshotId === node.id
+								const nodeError =
+									workflowRestoreState.lastError?.snapshotId === node.id
+										? workflowRestoreState.lastError
+										: null
+								const isCurrentCheckpoint = Boolean(
+									node.checkpoint?.hash &&
+										currentCheckpoint &&
+										node.checkpoint.hash === currentCheckpoint,
+								)
+								const snapshotTs = node.snapshotTs ?? node.completedAt ?? node.startedAt ?? Date.now()
+								const handleWorkflowRestore = () => {
+									if (!canRestore || !node.checkpoint) {
+										return
+									}
+									onRestoreNode({
+										snapshotId: node.id,
+										taskId: node.taskId,
+										snapshotTs,
+										checkpointHash: node.checkpoint.hash,
+										checkpointTs: node.checkpoint.ts ?? snapshotTs,
+										strategy: "checkpoint-only",
+									})
+								}
 								return (
 									<div key={node.id} className="relative mb-4 last:mb-0">
 										<svg className="absolute left-0 top-0" width="16" height="100%">
-											<circle cx="8" cy="16" r="4" fill="var(--vscode-editor-background)" stroke={stroke} strokeWidth="1" />
+											<circle
+												cx="8"
+												cy="16"
+												r="4"
+												fill="var(--vscode-editor-background)"
+												stroke={stroke}
+												strokeWidth="1"
+											/>
 											{idx < workflowNodes.length - 1 && (
-												<line x1="8" x2="8" y1="16" y2="100%" stroke={stroke} strokeWidth="1" strokeDasharray="4 4" />
+												<line
+													x1="8"
+													x2="8"
+													y1="16"
+													y2="100%"
+													stroke={stroke}
+													strokeWidth="1"
+													strokeDasharray="4 4"
+												/>
 											)}
 										</svg>
 										<button
@@ -205,29 +275,91 @@ const startResize = (mode: "horizontal" | "vertical" | "both") => (event: ReactP
 												"ml-6 w-[88%] cursor-pointer rounded-xl border px-3 py-2 text-left",
 												isActive
 													? "border-[var(--vscode-focusBorder)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_95%,var(--vscode-panel-border))]"
-													: "border-[var(--vscode-textLink-foreground)]",
+													: node.supportsCheckpointRestore
+														? "border-[var(--vscode-charts-orange)] bg-[color-mix(in_srgb,var(--vscode-editor-background)_96%,var(--vscode-charts-orange)_15%)]"
+														: "border-[var(--vscode-textLink-foreground)]",
 											)}>
-											<p className="text-[10px] uppercase tracking-widest text-vscode-descriptionForeground">Agent</p>
-											<p className="text-sm font-medium text-vscode-editor-foreground">
-												{displayIndex}. {nodeTitle}
+											<p className="text-[10px] uppercase tracking-widest text-vscode-descriptionForeground">
+												Agent
 											</p>
-											<p className="text-[11px] text-vscode-descriptionForeground">任务 ID：{node.taskId}</p>
-											{node.mode && <p className="text-[11px] text-vscode-descriptionForeground">模式 {node.mode}</p>}
+											<div className="flex items-center gap-2">
+												<p className="text-sm font-medium text-vscode-editor-foreground">
+													{displayIndex}. {nodeTitle}
+												</p>
+												{node.supportsCheckpointRestore && (
+													<span className="rounded-full border border-[var(--vscode-charts-orange)] px-2 py-px text-[10px] uppercase text-[var(--vscode-charts-orange)]">
+														Checkpoint
+													</span>
+												)}
+											</div>
+											<p className="text-[11px] text-vscode-descriptionForeground">
+												任务 ID：{node.taskId}
+											</p>
+											{node.mode && (
+												<p className="text-[11px] text-vscode-descriptionForeground">
+													模式 {node.mode}
+												</p>
+											)}
 											{duration !== undefined && (
-												<p className="text-[11px] text-vscode-descriptionForeground">持续 {formatDuration(duration)}</p>
+												<p className="text-[11px] text-vscode-descriptionForeground">
+													持续 {formatDuration(duration)}
+												</p>
 											)}
 										</button>
 										{isActive && (
 											<div className="ml-6 mt-2 w-[88%] rounded-xl border border-vscode-panel-border bg-[color-mix(in_srgb,var(--vscode-editor-background)_96%,var(--vscode-panel-border))] p-3 text-xs">
+												{canRestore && (
+													<div className="mb-3 flex flex-wrap items-center gap-2">
+														<button
+															type="button"
+															onClick={handleWorkflowRestore}
+															disabled={isPendingRestore}
+															className={cn(
+																"rounded-xl border px-3 py-1 text-[11px] font-medium",
+																isPendingRestore
+																	? "border-[var(--vscode-descriptionForeground)] text-vscode-descriptionForeground"
+																	: "border-[var(--vscode-charts-orange)] text-[var(--vscode-charts-orange)] hover:bg-[color-mix(in_srgb,var(--vscode-editor-background)_92%,var(--vscode-charts-orange)_25%)]",
+															)}>
+															{isPendingRestore ? "回溯中..." : "回溯到 checkpoint"}
+														</button>
+														{isCurrentCheckpoint && (
+															<span className="text-[11px] text-vscode-descriptionForeground">
+																当前 checkpoint
+															</span>
+														)}
+													</div>
+												)}
+												{nodeError && (
+													<p className="mb-2 text-[11px] text-[var(--vscode-errorForeground)]">
+														恢复失败：{nodeError.message}
+													</p>
+												)}
+												{!nodeError && recentRestore && (
+													<p className="mb-2 text-[11px] text-[var(--vscode-charts-green)]">
+														已回溯到该节点
+													</p>
+												)}
 												<p className="mb-2 text-vscode-descriptionForeground">内部事件</p>
-												{node.events.length === 0 && <p className="text-vscode-descriptionForeground">无工具/Hook 活动</p>}
+												{node.events.length === 0 && (
+													<p className="text-vscode-descriptionForeground">
+														无工具/Hook 活动
+													</p>
+												)}
 												{node.events.map((event) => (
 													<div key={event.id} className="mb-2 last:mb-0">
 														<div className="flex items-center justify-between">
-															<p className="font-medium text-vscode-editor-foreground">{event.title}</p>
-															<span className="text-[10px] text-vscode-descriptionForeground">{formatTimestamp(event.timestamp)}</span>
+															<p className="font-medium text-vscode-editor-foreground">
+																{event.title}
+															</p>
+															<span className="text-[10px] text-vscode-descriptionForeground">
+																{formatTimestamp(event.timestamp)}
+															</span>
 														</div>
-														{event.detail && <p className="text-vscode-descriptionForeground">{event.detail}</p>}
+														{event.detail && (
+															<p className="text-vscode-descriptionForeground">
+																{event.detail}
+															</p>
+														)}
 														{event.sourceMessage && (
 															<pre className="mt-1 max-h-40 overflow-auto rounded bg-[color-mix(in_srgb,var(--vscode-editor-background)_98%,var(--vscode-panel-border))] p-2 text-[11px] text-vscode-editor-foreground">
 																{JSON.stringify(event.sourceMessage, null, 2)}
@@ -251,16 +383,33 @@ const startResize = (mode: "horizontal" | "vertical" | "both") => (event: ReactP
 							<span>{agentStateHistory.length} 条</span>
 						</div>
 						<div className="space-y-3">
-							{agentStateHistory.length === 0 && <p className="text-xs text-vscode-descriptionForeground">暂无记录</p>}
+							{agentStateHistory.length === 0 && (
+								<p className="text-xs text-vscode-descriptionForeground">暂无记录</p>
+							)}
 							{agentStateHistory.map((entry, idx) => (
-								<div key={`${entry.lastUpdated}-${idx}`} className="rounded-xl border border-vscode-panel-border bg-[color-mix(in_srgb,var(--vscode-editor-background)_92%,var(--vscode-panel-border))] p-3 text-xs">
+								<div
+									key={`${entry.lastUpdated}-${idx}`}
+									className="rounded-xl border border-vscode-panel-border bg-[color-mix(in_srgb,var(--vscode-editor-background)_92%,var(--vscode-panel-border))] p-3 text-xs">
 									<div className="flex items-center justify-between">
-										<span className="font-medium text-vscode-editor-foreground">{entry.statusLabel}</span>
-										<span className="text-[10px] text-vscode-descriptionForeground">{entry.lastUpdated || "-"}</span>
+										<span className="font-medium text-vscode-editor-foreground">
+											{entry.statusLabel}
+										</span>
+										<span className="text-[10px] text-vscode-descriptionForeground">
+											{entry.lastUpdated || "-"}
+										</span>
 									</div>
-									<div className="flex justify-between"><span className="text-vscode-descriptionForeground">模式</span><span className="text-vscode-editor-foreground">{entry.mode || "-"}</span></div>
-									<div className="flex justify-between"><span className="text-vscode-descriptionForeground">任务</span><span className="text-vscode-editor-foreground">{entry.taskLabel || "-"}</span></div>
-									<div className="flex justify-between"><span className="text-vscode-descriptionForeground">消息数</span><span className="text-vscode-editor-foreground">{entry.messageCount}</span></div>
+									<div className="flex justify-between">
+										<span className="text-vscode-descriptionForeground">模式</span>
+										<span className="text-vscode-editor-foreground">{entry.mode || "-"}</span>
+									</div>
+									<div className="flex justify-between">
+										<span className="text-vscode-descriptionForeground">任务</span>
+										<span className="text-vscode-editor-foreground">{entry.taskLabel || "-"}</span>
+									</div>
+									<div className="flex justify-between">
+										<span className="text-vscode-descriptionForeground">消息数</span>
+										<span className="text-vscode-editor-foreground">{entry.messageCount}</span>
+									</div>
 									<div className="mt-2">
 										<p className="text-vscode-descriptionForeground">事件内容</p>
 										<pre className="mt-1 whitespace-pre-wrap rounded bg-[color-mix(in_srgb,var(--vscode-editor-background)_96%,var(--vscode-panel-border))] p-2 text-[11px] text-vscode-editor-foreground">
@@ -281,41 +430,75 @@ const startResize = (mode: "horizontal" | "vertical" | "both") => (event: ReactP
 						</div>
 						<div className="relative pl-6">
 							<div className="absolute left-1 top-0 bottom-2 w-px bg-[color-mix(in_srgb,var(--vscode-editor-background)_40%,var(--vscode-panel-border))]" />
-							{eventList.length === 0 && <p className="text-xs text-vscode-descriptionForeground">暂无事件</p>}
+							{eventList.length === 0 && (
+								<p className="text-xs text-vscode-descriptionForeground">暂无事件</p>
+							)}
 							{eventList.map((event) => {
 								const stroke = getEventColor(event.type)
 								return (
 									<div key={event.id} className="relative mb-4 last:mb-0">
-									<div
-										className="absolute left-1 top-3 -translate-x-1/2 rounded-full border bg-[var(--vscode-editor-background)]"
-										style={{ width: 10, height: 10 }}
-									/>
-									<svg className="absolute left-0 top-0" width="16" height="100%">
-										<circle cx="8" cy="16" r="4" fill="var(--vscode-editor-background)" stroke={stroke} strokeWidth="1" />
-										<line x1="8" x2="8" y1="16" y2="100%" stroke={stroke} strokeWidth="1" strokeDasharray="4 4" />
-									</svg>
-									<div className="ml-4 rounded-xl border border-vscode-panel-border bg-[color-mix(in_srgb,var(--vscode-editor-background)_95%,var(--vscode-panel-border))] p-3">
-										<div className="flex items-center justify-between">
-											<p className="font-medium text-vscode-editor-foreground">{event.title}</p>
-											<span className="text-[10px] text-vscode-descriptionForeground">{formatTimestamp(event.timestamp)}</span>
+										<div
+											className="absolute left-1 top-3 -translate-x-1/2 rounded-full border bg-[var(--vscode-editor-background)]"
+											style={{ width: 10, height: 10 }}
+										/>
+										<svg className="absolute left-0 top-0" width="16" height="100%">
+											<circle
+												cx="8"
+												cy="16"
+												r="4"
+												fill="var(--vscode-editor-background)"
+												stroke={stroke}
+												strokeWidth="1"
+											/>
+											<line
+												x1="8"
+												x2="8"
+												y1="16"
+												y2="100%"
+												stroke={stroke}
+												strokeWidth="1"
+												strokeDasharray="4 4"
+											/>
+										</svg>
+										<div className="ml-4 rounded-xl border border-vscode-panel-border bg-[color-mix(in_srgb,var(--vscode-editor-background)_95%,var(--vscode-panel-border))] p-3">
+											<div className="flex items-center justify-between">
+												<p className="font-medium text-vscode-editor-foreground">
+													{event.title}
+												</p>
+												<span className="text-[10px] text-vscode-descriptionForeground">
+													{formatTimestamp(event.timestamp)}
+												</span>
+											</div>
+											{event.detail && (
+												<p className="text-xs text-vscode-descriptionForeground">
+													{event.detail}
+												</p>
+											)}
+											{event.sourceMessage && (
+												<pre className="mt-2 max-h-60 overflow-auto rounded bg-[color-mix(in_srgb,var(--vscode-editor-background)_96%,var(--vscode-panel-border))] p-2 text-[11px] text-vscode-editor-foreground">
+													{JSON.stringify(event.sourceMessage, null, 2)}
+												</pre>
+											)}
 										</div>
-										{event.detail && <p className="text-xs text-vscode-descriptionForeground">{event.detail}</p>}
-										{event.sourceMessage && (
-											<pre className="mt-2 max-h-60 overflow-auto rounded bg-[color-mix(in_srgb,var(--vscode-editor-background)_96%,var(--vscode-panel-border))] p-2 text-[11px] text-vscode-editor-foreground">
-												{JSON.stringify(event.sourceMessage, null, 2)}
-											</pre>
-										)}
 									</div>
-								</div>
-							)
+								)
 							})}
 						</div>
 					</section>
 				)}
 				<div className="pointer-events-auto select-none">
-					<div className="absolute inset-y-2 right-0 w-2 cursor-ew-resize" onPointerDown={startResize("horizontal")} />
-					<div className="absolute bottom-0 left-2 right-2 h-2 cursor-ns-resize" onPointerDown={startResize("vertical")} />
-					<div className="absolute bottom-0 right-0 h-4 w-4 cursor-nwse-resize" onPointerDown={startResize("both")} />
+					<div
+						className="absolute inset-y-2 right-0 w-2 cursor-ew-resize"
+						onPointerDown={startResize("horizontal")}
+					/>
+					<div
+						className="absolute bottom-0 left-2 right-2 h-2 cursor-ns-resize"
+						onPointerDown={startResize("vertical")}
+					/>
+					<div
+						className="absolute bottom-0 right-0 h-4 w-4 cursor-nwse-resize"
+						onPointerDown={startResize("both")}
+					/>
 				</div>
 			</div>
 		</div>
@@ -342,6 +525,9 @@ const EVENT_COLOR_MAP: Record<ChatEventType, string> = {
 }
 
 function getNodeColor(node: WorkflowGraphNode): string {
+	if (node.supportsCheckpointRestore) {
+		return "var(--vscode-charts-orange)"
+	}
 	if (node.mode) {
 		for (const rule of MODE_COLOR_RULES) {
 			if (rule.match.test(node.mode)) {

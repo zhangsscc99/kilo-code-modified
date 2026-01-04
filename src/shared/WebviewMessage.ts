@@ -156,6 +156,7 @@ export interface WebviewMessage {
 		| "checkpointDiff"
 		| "checkpointRestore"
 		| "requestCheckpointRestoreApproval"
+		| "workflowNodeRestore"
 		| "seeNewChanges" // kilocode_change
 		| "deleteMcpServer"
 		| "humanRelayResponse"
@@ -500,6 +501,27 @@ export const requestCheckpointRestoreApprovalPayloadSchema = z.object({
 
 export type RequestCheckpointRestoreApprovalPayload = z.infer<typeof requestCheckpointRestoreApprovalPayloadSchema>
 
+export const workflowNodeRestorePayloadSchema = z.object({
+	snapshotId: z.string(),
+	taskId: z.string(),
+	snapshotTs: z.number(),
+	checkpointHash: z.string(),
+	checkpointTs: z.number().optional(),
+	strategy: z.literal("checkpoint-only"),
+})
+
+export type WorkflowNodeRestorePayload = z.infer<typeof workflowNodeRestorePayloadSchema>
+
+export const workflowNodeRestoreResultPayloadSchema = z.object({
+	snapshotId: z.string(),
+	status: z.enum(["success", "error"]),
+	mode: z.literal("conversation"),
+	strategy: z.literal("checkpoint-only"),
+	error: z.string().optional(),
+})
+
+export type WorkflowNodeRestoreResultPayload = z.infer<typeof workflowNodeRestoreResultPayloadSchema>
+
 export interface IndexingStatusPayload {
 	state: "Standby" | "Indexing" | "Indexed" | "Error"
 	message: string
@@ -527,6 +549,7 @@ export type WebViewMessagePayload =
 	| TasksByIdRequestPayload
 	| TaskHistoryRequestPayload
 	| RequestCheckpointRestoreApprovalPayload
+	| WorkflowNodeRestorePayload
 	// kilocode_change end
 	| CheckpointDiffPayload
 	| CheckpointRestorePayload

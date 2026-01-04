@@ -17,26 +17,27 @@
 ## 3. Workflow 面板的数据是怎么来的？
 
 - 现在的 Workflow 面板直接消费扩展端转发的 `TaskEvent`。扩展端在 `ClineProvider` 中将 `RooCodeEventName` + payload 打包成 `WebviewTaskEvent` 发往 webview，`ExtensionStateContext` 把这些事件落在本地 `taskEvents` 数组，再交给 `buildWorkflowNodesFromTaskEvents` 构建节点。最近一次迭代主要包含：
-  1. **节点按步骤拆分**：`buildWorkflowNodesFromTaskEvents` 会为每个 task 维护一条事件时间线；一旦捕获到新的 agent `Message`，就复制当前时间线的数据生成新的 snapshot（ID 为 `taskId#step`），并把这一刻的内部事件写进节点，形成“节点随着步骤增加逐渐成长”的链式效果。Workflow 面板上，每个节点会显示 `stepIndex + label`，副标题是任务 ID。
-  2. **面板可缩放、默认更宽大**：Workflow 面板默认尺寸放大到原来的约 1.3 倍，并支持沿右边 / 底部 / 右下角拖拽调整宽高，以容纳更多按钮和节点。
-  3. **节点卡片尺寸微调**：单个节点卡片的宽度相当于父容器的 88%，展开的内部事件也沿用同样宽度，让面板内容紧凑且易读。
+    1. **节点等于 checkpoint**：构建器会为每个 task 缓存“上次 checkpoint 以来的所有消息/工具事件”，只要捕获到新的 `checkpoint_saved` 消息就将缓存 flush 成一个节点（ID 为 `taskId#checkpoint-N`），节点的 `events` 就代表“这个 checkpoint 之前累计执行过的所有操作”。没有 checkpoint 的任务会显示“暂无 checkpoint 数据”。
+    2. **面板可缩放、默认更宽大**：Workflow 面板默认尺寸放大到原来的约 1.3 倍，并支持沿右边 / 底部 / 右下角拖拽调整宽高，以容纳更多按钮和节点。
+    3. **节点卡片尺寸微调**：单个节点卡片的宽度相当于父容器的 88%，展开的内部事件也沿用同样宽度，让面板内容紧凑且易读。
 - TaskCompleted/TaskAborted 会把最后一个 snapshot 的 `completedAt` 结束时间补全；`TaskModeSwitched` 更新节点的 mode/label；Subagent（即 `TaskDelegated`/`TaskSpawned` 的 child task）继续作为独立节点存在：事件里带着 child taskId，构建器创建子节点并通过 parentId 与父节点连线。
 
 ### DAG 设计思路（进行中）
 
 - DAG（Directed Acyclic Graph）意味着节点之间有明确的有向边且无环，适合表示“agent → tool → sub-agent”这种流程。现在我们已经拥有 TaskEvent 数据和父子 taskId，所以可以构建真实节点，但仍需改进“一个节点囊括多个步骤”的行为。
-- agent 每出现一个新增步骤（Message / Hook 等会进入 `messages` 列表），构建器都会复制当前时间线生成新的 snapshot 节点，节点之间按 step 号顺序串联，便于理解推理轨迹。
+- agent 每保存一次 checkpoint，就会生成一个新的节点；节点之间按 checkpoint 序号顺序串联，便于理解从旧 checkpoint 到新 checkpoint 之间发生的所有写操作。
 - TaskDelegated / TaskSpawned / TaskDelegationResumed / TaskDelegationCompleted 事件仍然继续用于创建跨 task 的父子节点，所以多层 subagent 会自然显示为树状结构。
 
 #### 数据来源与状态流
 
 1. **TaskEvent / RooCode 事件流（当前实现）**
-   - 扩展端监听 TaskEvent，并通过 `ExtensionMessage` 类型 `taskEvent` 推送给 webview。payload 中包含 `eventName`, `payload`, `taskId`, `taskIdentifier`, 以及必要的 parent/child ids。
-   - Webview 缓存这些事件，并在 Workflow 面板中实时映射为节点/边。Agent/工具/hook 的颜色、节点展开详情等都基于这份数据。
-   - 后续支持“节点回档 + 继续推演”时，可直接利用节点上的 taskId 调用扩展端的 checkpoint 恢复逻辑。
+
+    - 扩展端监听 TaskEvent，并通过 `ExtensionMessage` 类型 `taskEvent` 推送给 webview。payload 中包含 `eventName`, `payload`, `taskId`, `taskIdentifier`, 以及必要的 parent/child ids。
+    - Webview 缓存这些事件，并在 Workflow 面板中实时映射为节点/边。Agent/工具/hook 的颜色、节点展开详情等都基于这份数据。
+    - 后续支持“节点回档 + 继续推演”时，可直接利用节点上的 taskId 调用扩展端的 checkpoint 恢复逻辑。
 
 2. **Kilocode Agent Manager 状态（备用）**
-   - 仍可作为补充信息，例如展示代理集群里不同角色的状态；但 DAG 主体以 TaskEvent 为准。
+    - 仍可作为补充信息，例如展示代理集群里不同角色的状态；但 DAG 主体以 TaskEvent 为准。
 
 ## 4. Agent State 时间线
 
@@ -54,9 +55,23 @@
 1. **扩展端**：监听 TaskEvent 并通过 `ExtensionMessage` 将事件推送到 webview，每条事件至少包含 `eventName`, `payload`, `taskId`, `parentTaskId`、`childTaskId`（若有）。
 2. **Webview 状态层**：新建一个 store/atom，缓存 TaskEvent 并构建 `nodes` + `edges` 数据结构。每个节点代表一个 Agent（或子任务），内部关联发生的 tool/hook 事件，且记录 `taskId`、持续时间、模式等信息。
 3. **WorkflowPanel UI**：
-   - 使用上述 DAG 数据渲染真实的节点列表（初期可继续使用纵向时间线形式）。
-   - 节点可点击展开详情（展示工具、Hook、时间、模式等），但暂不触发回档，仅用于查看。
-   - 现有 Agent State / Agent Events 标签继续复用消息推断，待 TaskEvent 数据完整后逐步迁移。
+    - 使用上述 DAG 数据渲染真实的节点列表（初期可继续使用纵向时间线形式）。
+    - 节点可点击展开详情（展示工具、Hook、时间、模式等），但暂不触发回档，仅用于查看。
+    - 现有 Agent State / Agent Events 标签继续复用消息推断，待 TaskEvent 数据完整后逐步迁移。
 4. **文档 / 测试**：记录 TaskEvent 接入方式，确保 WorkflowPanel 的渲染测试基于模拟 TaskEvent，而不是 `clineMessages`。
 
 未来在此基础上再接入“节点回档 + 继续推演”，届时只需在节点详情中添加回档入口，并复用已有的 `taskId` 元数据。
+
+## 6. Workflow 面板的 checkpoint-only 回溯（实验分支）
+
+- **节点识别与样式**：`webview-ui/src/utils/taskEventGraph.ts` 会把 `say:checkpoint_saved` 的消息记到 snapshot 上，节点对象会附带 `checkpoint.hash/ts` 和 `supportsCheckpointRestore`。在 UI (`WorkflowPanel.tsx`) 里，只有这些节点会显示橙色边框和 “Checkpoint” 徽章，并在展开后渲染“回溯到 checkpoint”按钮；为了避免误导，按钮会在有 pending 请求时禁用并显示文本 `回溯中...`。
+- **消息协议**：Workflow 面板点击回溯会通过 `workflowNodeRestore` 消息发到扩展，payload 包含 `snapshotId/taskId`、`snapshotTs`、`checkpointHash`、可选 `checkpointTs`，并固定 `strategy: "checkpoint-only"`。扩展端 (`webviewMessageHandler.ts`) 会先 `showTaskWithId`，然后执行 `cancelTask → waitFor 初始化 → checkpointRestore`，结束后用 `workflowNodeRestoreResult` 回传。该 result payload 携带 `snapshotId`、`status`、`mode: "conversation"`、`strategy: "checkpoint-only"` 以及可选 `error` 字符串。
+- **状态同步**：`ExtensionStateContext` 维护 `workflowRestoreState`（pending 节点、最近成功节点、错误信息）并缓存最近一次请求 payload。收到 `workflowNodeRestoreResult` 时，如果成功，会用缓存里的 `checkpointTs/snapshotTs` 裁剪本地 `taskEvents` 和 `clineMessages` 数组，确保回滚后的节点链与聊天区一致；失败则把错误文案绑定到对应节点。
+- **聊天 checkpoint 同步**：只有真正落地了 `checkpoint_saved` 的节点才可点击，Workflow 面板还会用 `currentCheckpoint`（扩展侧 real-time 推送）标记“当前 checkpoint”提示，以提醒用户该节点和聊天侧的 checkpoint 状态完全一致。
+
+## 7. Checkpoint 工作原理简述
+
+- **触发入口**：当 webview 发送 `type:"askResponse", askResponse:"messageResponse"`（`webview-ui/src/components/chat/ChatView.tsx`）时，`Task.handleWebviewAskResponse` 会调用 `this.checkpointSave(force, suppress)`（`src/core/task/Task.ts`），把本轮用户回复和 shadow git 同步。首条 `newTask` 消息不会经过这个入口，如需对话一开始就落 checkpoint 需要另行调用。
+- **需要 Git 与 workspace**：`checkpointSave` 内部先执行 `getCheckpointService`（`src/core/checkpoints/index.ts`）。该函数会检查当前任务是否启用了 checkpoints、是否能拿到 workspace 路径和 `context.globalStorageUri`，并确认本机安装了 Git、工作区没有嵌套仓库。如果任一条件失败，会把 `task.enableCheckpoints` 设为 `false` 并直接返回；因此只有“在真实工作区里 + Git 可用”时才会继续。
+- **影子仓库提交流程**：通过 `RepoPerTaskCheckpointService` 创建出的 `ShadowCheckpointService` 会在扩展全局存储目录下建一个独立 git 仓库（`.../tasks/<taskId>/checkpoints`），用 `core.worktree` 指向当前 workspace。`saveCheckpoint` 会先 `git add` 工作区（遵守 `.git/info/exclude`），然后执行 `git commit` 或 `git commit --allow-empty`（取决于 `force` 参数），最后把 `checkpoint_saved` 事件抛给扩展/webview。带 `suppressMessage: true` 的 checkpoint 仍会保存，只是 chat view 过滤掉提示。
+- **回溯/展示**：扩展端在收到 `checkpoint` 事件时，会给 webview 发送 `currentCheckpointUpdated` 并写入 `clineMessages`，Workflow 面板也据此打上可回溯标记。只要 shadow repo 还在，可通过 `checkpointRestore`（同文件）把工作区和聊天历史回滚到指定提交。

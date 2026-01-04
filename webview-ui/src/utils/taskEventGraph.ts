@@ -11,9 +11,12 @@ export interface WorkflowGraphNode {
 	mode?: string
 	startedAt?: number
 	completedAt?: number
+	snapshotTs?: number
 	parentIds: string[]
 	childIds: string[]
 	events: ChatTraceEvent[]
+	checkpoint?: { hash: string; ts?: number }
+	supportsCheckpointRestore: boolean
 }
 
 const UNKNOWN_TASK_ID = "unknown-task"
@@ -27,6 +30,8 @@ interface TaskTimeline {
 	parentIds: Set<string>
 	childIds: Set<string>
 	messages: ClineMessage[]
+	buffer: ClineMessage[]
+	bufferStart?: number
 	stepCounter: number
 	lastSnapshot?: WorkflowGraphNode
 }
@@ -45,6 +50,20 @@ function isMessagePayload(value: unknown): value is ForwardedMessagePayload {
 	return typeof value === "object" && value !== null && "message" in value
 }
 
+function getCheckpointHash(message?: ClineMessage) {
+	if (!message) {
+		return undefined
+	}
+	const checkpointHash = (message as ClineMessage & { checkpoint?: { to?: string } }).checkpoint?.to
+	if (typeof checkpointHash === "string" && checkpointHash.length > 0) {
+		return checkpointHash
+	}
+	if (message.say === "checkpoint_saved" && typeof message.text === "string") {
+		return message.text
+	}
+	return undefined
+}
+
 export function buildWorkflowNodesFromTaskEvents(events: ReceivedTaskEvent[]): WorkflowGraphNode[] {
 	const nodeMap = new Map<string, TaskTimeline>()
 	const snapshots: Array<{ node: WorkflowGraphNode; order: number; timestamp: number }> = []
@@ -59,6 +78,7 @@ export function buildWorkflowNodesFromTaskEvents(events: ReceivedTaskEvent[]): W
 				parentIds: new Set<string>(),
 				childIds: new Set<string>(),
 				messages: [],
+				buffer: [],
 				stepCounter: 0,
 			}
 			nodeMap.set(id, node)
@@ -66,27 +86,33 @@ export function buildWorkflowNodesFromTaskEvents(events: ReceivedTaskEvent[]): W
 		return node
 	}
 
-	const createSnapshot = (timeline: TaskTimeline, timestamp?: number) => {
+	const createSnapshot = (timeline: TaskTimeline, checkpointMessage: ClineMessage) => {
 		if (timeline.id === UNKNOWN_TASK_ID) {
 			return
 		}
 		timeline.stepCounter += 1
 		const snapshotId = `${timeline.id}#${timeline.stepCounter}`
-		const completedAt = timestamp ?? timeline.completedAt ?? timeline.startedAt
+		const snapshotTimestamp = checkpointMessage.ts
+		const checkpointHash = getCheckpointHash(checkpointMessage)
 		const node: WorkflowGraphNode = {
 			id: snapshotId,
 			taskId: timeline.id,
 			stepIndex: timeline.stepCounter,
 			label: timeline.label || timeline.mode || timeline.id,
 			mode: timeline.mode,
-			startedAt: timeline.startedAt ?? timestamp,
-			completedAt,
+			startedAt: timeline.bufferStart ?? checkpointMessage.ts,
+			completedAt: checkpointMessage.ts,
+			snapshotTs: snapshotTimestamp,
 			parentIds: Array.from(timeline.parentIds),
 			childIds: Array.from(timeline.childIds),
-			events: buildChatEventTrace(timeline.messages),
+			events: buildChatEventTrace(timeline.buffer),
+			checkpoint: checkpointHash ? { hash: checkpointHash, ts: checkpointMessage.ts } : undefined,
+			supportsCheckpointRestore: Boolean(checkpointHash),
 		}
 		timeline.lastSnapshot = node
-		snapshots.push({ node, order: sequence++, timestamp: completedAt ?? timestamp ?? 0 })
+		snapshots.push({ node, order: sequence++, timestamp: snapshotTimestamp ?? 0 })
+		timeline.buffer = []
+		timeline.bufferStart = undefined
 	}
 
 	for (const event of events) {
@@ -122,15 +148,19 @@ export function buildWorkflowNodesFromTaskEvents(events: ReceivedTaskEvent[]): W
 			case RooCodeEventName.Message: {
 				const payload = event.payload[0]
 				if (isMessagePayload(payload) && payload.message) {
-					primaryNode.messages.push(payload.message)
-					if (!primaryNode.label && payload.message.ask) {
-						primaryNode.label = payload.message.ask
+					const clineMessage = payload.message
+					primaryNode.messages.push(clineMessage)
+					primaryNode.buffer.push(clineMessage)
+					if (!primaryNode.bufferStart || (clineMessage.ts && clineMessage.ts < primaryNode.bufferStart)) {
+						primaryNode.bufferStart = clineMessage.ts ?? event.taskEventTimestamp
 					}
-					const messageTimestamp = payload.message.ts ?? event.taskEventTimestamp
-					if (!primaryNode.startedAt) {
-						primaryNode.startedAt = messageTimestamp
+					if (!primaryNode.label && clineMessage.ask) {
+						primaryNode.label = clineMessage.ask
 					}
-					createSnapshot(primaryNode, messageTimestamp)
+					const checkpointHash = getCheckpointHash(clineMessage)
+					if (checkpointHash) {
+						createSnapshot(primaryNode, clineMessage)
+					}
 				}
 				break
 			}

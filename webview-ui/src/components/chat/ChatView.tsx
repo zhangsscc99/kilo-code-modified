@@ -115,6 +115,9 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 		sendMessageOnEnter, // kilocode_change
 		isBrowserSessionActive,
 		taskEvents,
+		currentCheckpoint,
+		workflowRestoreState,
+		requestWorkflowNodeRestore,
 	} = useExtensionState()
 
 	const messagesRef = useRef(messages)
@@ -1143,7 +1146,7 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 		return false
 	}, [])
 
-const groupedMessages = useMemo(() => {
+	const groupedMessages = useMemo(() => {
 		// Only filter out the launch ask and result messages - browser actions appear in chat
 		const result: ClineMessage[] = visibleMessages.filter((msg) => !isBrowserSessionMessage(msg))
 
@@ -1158,20 +1161,17 @@ const groupedMessages = useMemo(() => {
 		return result
 	}, [isCondensing, visibleMessages, isBrowserSessionMessage])
 
-	const workflowPanelAgentState = useMemo(
-		() => {
-			const recent = visibleMessages.at(-1)
-			return {
-				statusLabel: isStreaming ? "Streaming" : sendingDisabled ? "Busy" : "Idle",
-				mode,
-				taskLabel: task?.text,
-				messageCount: visibleMessages.length,
-				lastEvent: recent?.text || recent?.say || recent?.ask,
-				lastUpdated: new Date().toLocaleTimeString(),
-			}
-		},
-		[visibleMessages, isStreaming, sendingDisabled, mode, task?.text],
-	)
+	const workflowPanelAgentState = useMemo(() => {
+		const recent = visibleMessages.at(-1)
+		return {
+			statusLabel: isStreaming ? "Streaming" : sendingDisabled ? "Busy" : "Idle",
+			mode,
+			taskLabel: task?.text,
+			messageCount: visibleMessages.length,
+			lastEvent: recent?.text || recent?.say || recent?.ask,
+			lastUpdated: new Date().toLocaleTimeString(),
+		}
+	}, [visibleMessages, isStreaming, sendingDisabled, mode, task?.text])
 
 	// scrolling
 
@@ -1675,18 +1675,18 @@ const groupedMessages = useMemo(() => {
 				<>
 					<div className="grow flex flex-col min-h-0" ref={scrollContainerRef}>
 						<div className="flex-auto min-h-0">
-					<Virtuoso
-						ref={virtuosoRef}
-						key={task.ts}
-						className="scrollable grow overflow-y-scroll mb-1"
-						increaseViewportBy={{ top: 400, bottom: 400 }} // kilocode_change: use more modest numbers to see if they reduce gray screen incidence
-						data={groupedMessages}
-						itemContent={itemContent}
-						// components={{ Footer: () => <ChatEventTrace messages={visibleMessages} /> }}
-						followOutput={(isAtBottom: boolean) => isAtBottom || stickyFollowRef.current}
-						atBottomStateChange={(isAtBottom: boolean) => {
-							setIsAtBottom(isAtBottom)
-							// Only show the scroll-to-bottom button if not at bottom
+							<Virtuoso
+								ref={virtuosoRef}
+								key={task.ts}
+								className="scrollable grow overflow-y-scroll mb-1"
+								increaseViewportBy={{ top: 400, bottom: 400 }} // kilocode_change: use more modest numbers to see if they reduce gray screen incidence
+								data={groupedMessages}
+								itemContent={itemContent}
+								// components={{ Footer: () => <ChatEventTrace messages={visibleMessages} /> }}
+								followOutput={(isAtBottom: boolean) => isAtBottom || stickyFollowRef.current}
+								atBottomStateChange={(isAtBottom: boolean) => {
+									setIsAtBottom(isAtBottom)
+									// Only show the scroll-to-bottom button if not at bottom
 									setShowScrollToBottom(!isAtBottom)
 								}}
 								atBottomThreshold={10}
@@ -1842,6 +1842,9 @@ const groupedMessages = useMemo(() => {
 						setWorkflowPanelCollapsed(false)
 					}}
 					agentState={workflowPanelAgentState}
+					currentCheckpoint={currentCheckpoint}
+					workflowRestoreState={workflowRestoreState}
+					onRestoreNode={requestWorkflowNodeRestore}
 				/>
 			)}
 

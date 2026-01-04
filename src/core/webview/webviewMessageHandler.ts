@@ -54,6 +54,7 @@ import {
 	checkoutDiffPayloadSchema,
 	checkoutRestorePayloadSchema,
 	requestCheckpointRestoreApprovalPayloadSchema,
+	workflowNodeRestorePayloadSchema,
 } from "../../shared/WebviewMessage"
 import { checkExistKey } from "../../shared/checkExistApiConfig"
 import { experimentDefault } from "../../shared/experiments"
@@ -117,6 +118,19 @@ export const webviewMessageHandler = async (
 
 	const getCurrentCwd = () => {
 		return provider.getCurrentTask()?.cwd || provider.cwd
+	}
+
+	const findCheckpointTimestampForHash = (messages: ClineMessage[] | undefined, checkpointHash: string) => {
+		if (!messages?.length) {
+			return undefined
+		}
+		for (let index = messages.length - 1; index >= 0; index -= 1) {
+			const message = messages[index]
+			if (message?.say === "checkpoint_saved" && message?.text === checkpointHash) {
+				return message.ts
+			}
+		}
+		return undefined
 	}
 	/**
 	 * Shared utility to find message indices based on timestamp.
@@ -1325,6 +1339,74 @@ export const webviewMessageHandler = async (
 				}
 			}
 
+			break
+		}
+		case "workflowNodeRestore": {
+			const parsed = workflowNodeRestorePayloadSchema.safeParse(message.payload)
+			if (!parsed.success) {
+				await provider.postMessageToWebview({
+					type: "workflowNodeRestoreResult",
+					workflowNodeRestoreResult: {
+						snapshotId: (message.payload as { snapshotId?: string })?.snapshotId ?? "unknown",
+						status: "error",
+						mode: "conversation",
+						strategy: "checkpoint-only",
+						error: "Invalid workflow restore payload",
+					},
+				})
+				break
+			}
+			const payload = parsed.data
+			const respond = async (status: "success" | "error", errorMessage?: string) => {
+				await provider.postMessageToWebview({
+					type: "workflowNodeRestoreResult",
+					workflowNodeRestoreResult: {
+						snapshotId: payload.snapshotId,
+						status,
+						mode: "conversation",
+						strategy: "checkpoint-only",
+						...(errorMessage ? { error: errorMessage } : {}),
+					},
+				})
+			}
+			try {
+				await provider.showTaskWithId(payload.taskId)
+			} catch (error) {
+				await respond("error", `Unable to select task ${payload.taskId}`)
+				break
+			}
+			const selectedTask = provider.getCurrentTask()
+			if (!selectedTask) {
+				await respond("error", "Task unavailable for checkpoint restore")
+				break
+			}
+			const checkpointTs =
+				payload.checkpointTs ??
+				findCheckpointTimestampForHash(selectedTask.clineMessages, payload.checkpointHash)
+			if (!checkpointTs) {
+				await respond("error", "Checkpoint not found for selected node")
+				break
+			}
+			await provider.cancelTask()
+			try {
+				await pWaitFor(() => provider.getCurrentTask()?.isInitialized === true, { timeout: 3_000 })
+			} catch (error) {
+				vscode.window.showErrorMessage(t("common:errors.checkpoint_timeout"))
+				await respond("error", t("common:errors.checkpoint_timeout"))
+				break
+			}
+			try {
+				await provider.getCurrentTask()?.checkpointRestore({
+					ts: checkpointTs,
+					commitHash: payload.checkpointHash,
+					mode: "restore",
+				})
+				await provider.postStateToWebview()
+				await respond("success")
+			} catch (error) {
+				vscode.window.showErrorMessage(t("common:errors.checkpoint_failed"))
+				await respond("error", t("common:errors.checkpoint_failed"))
+			}
 			break
 		}
 		case "cancelTask":

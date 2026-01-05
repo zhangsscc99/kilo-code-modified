@@ -50,6 +50,7 @@ const TREE_NODE_HEIGHT = 72
 const TREE_HORIZONTAL_GAP = 180
 const TREE_VERTICAL_GAP = 140
 const TREE_PADDING_X = 100
+const TREE_CONNECTOR_COLOR = "color-mix(in srgb, var(--vscode-textLink-foreground) 70%, var(--vscode-editor-background))"
 const TREE_PADDING_Y = 32
 
 export function WorkflowPanel({
@@ -601,7 +602,7 @@ export function WorkflowPanel({
 														<path
 															key={`${edge.fromId}-${edge.toId}-${idx}`}
 															d={`M ${fromX} ${fromY} L ${fromX} ${elbowY} L ${toX} ${elbowY} L ${toX} ${toY}`}
-															stroke="color-mix(in srgb, var(--vscode-panel-border) 85%, var(--vscode-editor-background))"
+															stroke={TREE_CONNECTOR_COLOR}
 															strokeWidth={1.5}
 															strokeLinecap="round"
 															strokeLinejoin="round"
@@ -625,11 +626,11 @@ export function WorkflowPanel({
 															key={node.id}
 															type="button"
 															onClick={() => handleTreeNodeSelect(node)}
-															className="absolute z-10 flex flex-col rounded-2xl border border-vscode-panel-border bg-[color-mix(in_srgb,var(--vscode-editor-background)_94%,var(--vscode-panel-border))] p-3 text-left text-xs shadow-sm transition hover:border-[var(--vscode-focusBorder)] hover:shadow"
+															className="absolute z-10 flex flex-col rounded-2xl border border-[color-mix(in_srgb,var(--vscode-textLink-foreground)_55%,var(--vscode-panel-border))] bg-[color-mix(in_srgb,var(--vscode-editor-background)_94%,var(--vscode-panel-border))] p-3 text-left text-xs shadow-sm transition-colors hover:border-[var(--vscode-charts-orange)] hover:shadow-lg"
 															style={{ left, top, width: TREE_NODE_WIDTH, height: TREE_NODE_HEIGHT }}
 															aria-label={`查看 ${branchLabel} · ${node.label || node.taskId}`}>
 														<p className="text-[10px] uppercase tracking-widest text-vscode-descriptionForeground leading-tight">{branchLabel}</p>
-														<p className="text-[11px] leading-tight text-vscode-descriptionForeground">
+														<p className="mt-1 text-[11px] leading-tight text-vscode-descriptionForeground">
 															{(() => {
 																const hash = node.checkpoint?.hash ?? node.id
 																if (!hash) {
@@ -638,7 +639,7 @@ export function WorkflowPanel({
 																return hash.length > 5 ? `${hash.slice(0, 5)}...` : hash
 															})()}
 														</p>
-														<p className="text-sm font-medium leading-tight text-vscode-editor-foreground line-clamp-2 break-words">
+														<p className="mt-1 text-sm font-medium leading-tight text-vscode-editor-foreground line-clamp-2 break-words">
 															{node.label || node.taskId}
 														</p>
 														</button>

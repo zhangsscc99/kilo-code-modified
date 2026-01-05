@@ -75,3 +75,23 @@
 - **需要 Git 与 workspace**：`checkpointSave` 内部先执行 `getCheckpointService`（`src/core/checkpoints/index.ts`）。该函数会检查当前任务是否启用了 checkpoints、是否能拿到 workspace 路径和 `context.globalStorageUri`，并确认本机安装了 Git、工作区没有嵌套仓库。如果任一条件失败，会把 `task.enableCheckpoints` 设为 `false` 并直接返回；因此只有“在真实工作区里 + Git 可用”时才会继续。
 - **影子仓库提交流程**：通过 `RepoPerTaskCheckpointService` 创建出的 `ShadowCheckpointService` 会在扩展全局存储目录下建一个独立 git 仓库（`.../tasks/<taskId>/checkpoints`），用 `core.worktree` 指向当前 workspace。`saveCheckpoint` 会先 `git add` 工作区（遵守 `.git/info/exclude`），然后执行 `git commit` 或 `git commit --allow-empty`（取决于 `force` 参数），最后把 `checkpoint_saved` 事件抛给扩展/webview。带 `suppressMessage: true` 的 checkpoint 仍会保存，只是 chat view 过滤掉提示。
 - **回溯/展示**：扩展端在收到 `checkpoint` 事件时，会给 webview 发送 `currentCheckpointUpdated` 并写入 `clineMessages`，Workflow 面板也据此打上可回溯标记。只要 shadow repo 还在，可通过 `checkpointRestore`（同文件）把工作区和聊天历史回滚到指定提交。
+
+## 8. 多分支树形 Workflow
+
+- **节点与分支标识**
+  - `buildWorkflowNodesFromTaskEvents`（`webview-ui/src/utils/taskEventGraph.ts`）现在会把 `branchId`、`branchParentSnapshotId` 与 `previousSnapshotId` 写进 `WorkflowGraphNode`，默认分支为 `branch-main/Branch A`。恢复成功后，webview 根据点击的节点在 `ExtensionStateContext` 中创建新的分支元数据（`workflowBranches`），并将后续 `TaskEvent` 标记到当前 active branch。
+  - 每次捕获 `checkpoint_saved` 消息时，`ExtensionStateContext` 会更新 `snapshotBranchAssignmentRef` 和 per-task 计数器，让 snapshot ID（`taskId#N`）与分支一一对应，后续的 `workflowNodeRestoreResult` 也能根据这个索引创建正确的子分支。
+
+- **状态同步**
+  - `ExtensionStateContext` 暴露 `workflowBranches` 和 `activeWorkflowBranchId`（`webview-ui/src/context/ExtensionStateContext.tsx`）。`workflowNodeRestoreResult` 成功后不再裁剪 `taskEvents`，而是把旧分支标记为 `archived`，并新建一个状态为 `active` 的分支，供后续事件继续写入。
+  - `ReceivedTaskEvent` 新增 `branchId` 字段（`webview-ui/src/types/taskEvents.ts`），`taskEvent` 消息在入队时自动写入当前 active branch，从而让 builder/测试都能准确区分不同分支的事件。
+
+- **UI 结构（WorkflowPanel）**
+  - Workflow tab 顶部新增 “全部分支” 快捷按钮，同一块卡片里继续列出每条分支的来源 checkpoint、节点数量和运行状态（当前分支显示绿色“当前运行”）。点击普通分支按钮会进入时间线视图，而选择“全部分支”会展开树状思维导图。
+  - 树状视图按照 `workflowBranches.parentBranchId` 递归渲染，分支卡片使用 `border-l` 缩进显示父子关系，节点卡片沿用时间线的 UI，但根据深度调节缩进。`selectedBranchLabel` 也会在标题旁更新为 “全部分支”。
+  - “回溯到 checkpoint” 按钮在两种视图下都会携带 `{ branchId }` 元数据调用 `requestWorkflowNodeRestore`，回溯成功后始终从所选节点派生新分支，旧分支留作可视化历史。
+
+- **后续可扩展项**
+  1. 在 `workflowBranches` 中记录用户可见颜色/徽章，让 DAG 视图或节点列表能快速区分不同分支。
+  2. 加入分支归档/重命名/删除 API，并把这些操作同步到扩展端的历史存档。
+  3. 复用 checkpoint diff 能力提供分支对比（例如 Branch A vs Branch B 的文件差异），方便挑选合适的分支继续推演。

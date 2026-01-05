@@ -6,6 +6,8 @@ import { RooCodeEventName } from "@roo-code/types"
 import { WorkflowPanel } from "../WorkflowPanel"
 import { TooltipProvider } from "../../ui/tooltip"
 import type { ReceivedTaskEvent } from "@/types/taskEvents"
+import type { WorkflowBranchInfo } from "@/context/ExtensionStateContext"
+import { DEFAULT_WORKFLOW_BRANCH_ID } from "@/utils/taskEventGraph"
 
 const baseTs = 1_700_000_000_000
 
@@ -77,6 +79,58 @@ const checkpointTaskEvent: ReceivedTaskEvent = {
 	taskEventTimestamp: baseTs + 4_500,
 }
 
+const checkpointMessageBranchB = {
+	ts: baseTs + 6_000,
+	type: "say",
+	say: "checkpoint_saved",
+	text: "hash-2",
+	checkpoint: { from: "hash-1", to: "hash-2" },
+} as ClineMessage & { checkpoint: { from: string; to: string } }
+
+const branchBEvent: ReceivedTaskEvent = {
+	eventName: RooCodeEventName.Message,
+	payload: [
+		{
+			taskId: "123",
+			action: "updated",
+			message: checkpointMessageBranchB,
+		},
+	],
+	taskIdentifier: "123",
+	branchId: "branch-b",
+	taskEventTimestamp: baseTs + 6_000,
+}
+
+const baseBranches: WorkflowBranchInfo[] = [
+	{
+		id: DEFAULT_WORKFLOW_BRANCH_ID,
+		label: "Branch A",
+		parentSnapshotId: null,
+		parentBranchId: null,
+		createdAt: baseTs,
+		status: "active",
+	},
+]
+
+const multiBranchList: WorkflowBranchInfo[] = [
+	{
+		id: DEFAULT_WORKFLOW_BRANCH_ID,
+		label: "Branch A",
+		parentSnapshotId: null,
+		parentBranchId: null,
+		createdAt: baseTs,
+		status: "archived",
+	},
+	{
+		id: "branch-b",
+		label: "Branch B",
+		parentSnapshotId: "123#1",
+		parentBranchId: DEFAULT_WORKFLOW_BRANCH_ID,
+		createdAt: baseTs + 5_500,
+		status: "active",
+	},
+]
+
 describe("WorkflowPanel", () => {
 	it("renders empty state when no checkpoints exist", () => {
 		const handleRestore = vi.fn()
@@ -97,6 +151,8 @@ describe("WorkflowPanel", () => {
 						lastUpdated: "now",
 					}}
 					currentCheckpoint={undefined}
+					workflowBranches={baseBranches}
+					activeBranchId={DEFAULT_WORKFLOW_BRANCH_ID}
 					workflowRestoreState={baseWorkflowRestoreState}
 					onRestoreNode={handleRestore}
 				/>
@@ -104,8 +160,8 @@ describe("WorkflowPanel", () => {
 		)
 
 		expect(screen.getByText(/Workflow 节点/)).toBeInTheDocument()
-		expect(screen.getByText(/0 nodes/)).toBeInTheDocument()
-		expect(screen.getByText(/暂无 checkpoint 数据/)).toBeInTheDocument()
+		expect(screen.getByText(/0 nodes · Branch A/)).toBeInTheDocument()
+		expect(screen.getByText(/当前分支暂无 checkpoint 数据/)).toBeInTheDocument()
 	})
 
 	it("renders tabbed layout and switches between panels", async () => {
@@ -128,6 +184,8 @@ describe("WorkflowPanel", () => {
 						lastUpdated: "now",
 					}}
 					currentCheckpoint={undefined}
+					workflowBranches={baseBranches}
+					activeBranchId={DEFAULT_WORKFLOW_BRANCH_ID}
 					workflowRestoreState={baseWorkflowRestoreState}
 					onRestoreNode={handleRestore}
 				/>
@@ -135,7 +193,7 @@ describe("WorkflowPanel", () => {
 		)
 
 		expect(screen.getByText(/Workflow 节点/)).toBeInTheDocument()
-		expect(screen.getByText(/1 nodes/)).toBeInTheDocument()
+		expect(screen.getByText(/1 nodes · Branch A/)).toBeInTheDocument()
 		expect(screen.getByText(/1\. triage/i)).toBeInTheDocument()
 		await user.click(screen.getByRole("button", { name: /Agent State/i }))
 		expect(screen.getByText(/Agent 状态/)).toBeInTheDocument()
@@ -159,6 +217,8 @@ describe("WorkflowPanel", () => {
 					onClose={() => {}}
 					agentState={{ statusLabel: "Idle", messageCount: 0 }}
 					currentCheckpoint={undefined}
+					workflowBranches={baseBranches}
+					activeBranchId={DEFAULT_WORKFLOW_BRANCH_ID}
 					workflowRestoreState={baseWorkflowRestoreState}
 					onRestoreNode={handleRestore}
 				/>
@@ -182,13 +242,15 @@ describe("WorkflowPanel", () => {
 					onClose={() => {}}
 					agentState={{ statusLabel: "Idle", messageCount: extendedMessages.length }}
 					currentCheckpoint="hash-1"
+					workflowBranches={baseBranches}
+					activeBranchId={DEFAULT_WORKFLOW_BRANCH_ID}
 					workflowRestoreState={baseWorkflowRestoreState}
 					onRestoreNode={handleRestore}
 				/>
 			</TooltipProvider>,
 		)
 
-		const workflowNodeButtons = screen.getAllByRole("button", { name: /Agent/i })
+		const workflowNodeButtons = screen.getAllByRole("button", { name: /1\.\s*triage/i })
 		await user.click(workflowNodeButtons[workflowNodeButtons.length - 1])
 		const restoreButton = await screen.findByRole("button", { name: "回溯到 checkpoint" })
 		expect(restoreButton).toBeInTheDocument()
@@ -199,6 +261,35 @@ describe("WorkflowPanel", () => {
 				checkpointHash: "hash-1",
 				strategy: "checkpoint-only",
 			}),
+			expect.objectContaining({ branchId: DEFAULT_WORKFLOW_BRANCH_ID }),
 		)
+	})
+
+	it("renders all branches tree view", async () => {
+		const user = userEvent.setup()
+		const handleRestore = vi.fn()
+		render(
+			<TooltipProvider>
+				<WorkflowPanel
+					messages={[...messages, checkpointMessage, checkpointMessageBranchB]}
+					taskEvents={[...sharedTaskEvents, checkpointTaskEvent, branchBEvent]}
+					collapsed={false}
+					onToggleCollapse={() => {}}
+					onClose={() => {}}
+					agentState={{ statusLabel: "Idle", messageCount: messages.length + 2 }}
+					currentCheckpoint={undefined}
+					workflowBranches={multiBranchList}
+					activeBranchId="branch-b"
+					workflowRestoreState={baseWorkflowRestoreState}
+					onRestoreNode={handleRestore}
+				/>
+			</TooltipProvider>,
+		)
+
+		await user.click(screen.getByRole("button", { name: /全部分支/ }))
+		const branchBTreeNode = await screen.findByRole("button", { name: /查看\s+Branch B/i })
+		expect(branchBTreeNode).toBeInTheDocument()
+		await user.click(branchBTreeNode)
+		expect(screen.getByText(/nodes · Branch B/)).toBeInTheDocument()
 	})
 })

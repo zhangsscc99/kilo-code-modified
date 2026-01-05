@@ -115,6 +115,8 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 		sendMessageOnEnter, // kilocode_change
 		isBrowserSessionActive,
 		taskEvents,
+		workflowBranches,
+		activeWorkflowBranchId,
 		currentCheckpoint,
 		workflowRestoreState,
 		requestWorkflowNodeRestore,
@@ -1841,10 +1843,12 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 						setShowWorkflowPanel(false)
 						setWorkflowPanelCollapsed(false)
 					}}
-					agentState={workflowPanelAgentState}
-					currentCheckpoint={currentCheckpoint}
-					workflowRestoreState={workflowRestoreState}
-					onRestoreNode={requestWorkflowNodeRestore}
+												agentState={workflowPanelAgentState}
+												currentCheckpoint={currentCheckpoint}
+												workflowBranches={workflowBranches}
+												activeBranchId={activeWorkflowBranchId}
+												workflowRestoreState={workflowRestoreState}
+												onRestoreNode={requestWorkflowNodeRestore}
 				/>
 			)}
 

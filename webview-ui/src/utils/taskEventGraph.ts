@@ -17,7 +17,20 @@ export interface WorkflowGraphNode {
 	events: ChatTraceEvent[]
 	checkpoint?: { hash: string; ts?: number }
 	supportsCheckpointRestore: boolean
+	branchId: string
+	branchParentSnapshotId?: string | null
+	previousSnapshotId?: string
 }
+
+export interface WorkflowBranchMetadata {
+	id: string
+	label: string
+	parentSnapshotId: string | null
+	parentBranchId: string | null
+	createdAt: number
+}
+
+export const DEFAULT_WORKFLOW_BRANCH_ID = "branch-main"
 
 const UNKNOWN_TASK_ID = "unknown-task"
 
@@ -50,7 +63,7 @@ function isMessagePayload(value: unknown): value is ForwardedMessagePayload {
 	return typeof value === "object" && value !== null && "message" in value
 }
 
-function getCheckpointHash(message?: ClineMessage) {
+export function getCheckpointHash(message?: ClineMessage) {
 	if (!message) {
 		return undefined
 	}
@@ -64,10 +77,14 @@ function getCheckpointHash(message?: ClineMessage) {
 	return undefined
 }
 
-export function buildWorkflowNodesFromTaskEvents(events: ReceivedTaskEvent[]): WorkflowGraphNode[] {
+export function buildWorkflowNodesFromTaskEvents(
+	events: ReceivedTaskEvent[],
+	options?: { branchMetadata?: Record<string, WorkflowBranchMetadata> },
+): WorkflowGraphNode[] {
 	const nodeMap = new Map<string, TaskTimeline>()
 	const snapshots: Array<{ node: WorkflowGraphNode; order: number; timestamp: number }> = []
 	let sequence = 0
+	const branchLastSnapshotId = new Map<string, string | undefined>()
 
 	const ensureNode = (taskIdentifier?: string): TaskTimeline => {
 		const id = taskIdentifier ?? UNKNOWN_TASK_ID
@@ -86,7 +103,7 @@ export function buildWorkflowNodesFromTaskEvents(events: ReceivedTaskEvent[]): W
 		return node
 	}
 
-	const createSnapshot = (timeline: TaskTimeline, checkpointMessage: ClineMessage) => {
+	const createSnapshot = (timeline: TaskTimeline, checkpointMessage: ClineMessage, branchId: string) => {
 		if (timeline.id === UNKNOWN_TASK_ID) {
 			return
 		}
@@ -94,6 +111,11 @@ export function buildWorkflowNodesFromTaskEvents(events: ReceivedTaskEvent[]): W
 		const snapshotId = `${timeline.id}#${timeline.stepCounter}`
 		const snapshotTimestamp = checkpointMessage.ts
 		const checkpointHash = getCheckpointHash(checkpointMessage)
+		const normalizedBranchId = branchId || DEFAULT_WORKFLOW_BRANCH_ID
+		const branchInfo = options?.branchMetadata?.[normalizedBranchId]
+		const previousSnapshotId = branchLastSnapshotId.get(normalizedBranchId) ?? branchInfo?.parentSnapshotId ?? undefined
+		const isFirstInBranch = !branchLastSnapshotId.get(normalizedBranchId)
+		const branchParentSnapshotId = isFirstInBranch ? branchInfo?.parentSnapshotId ?? null : undefined
 		const node: WorkflowGraphNode = {
 			id: snapshotId,
 			taskId: timeline.id,
@@ -108,11 +130,15 @@ export function buildWorkflowNodesFromTaskEvents(events: ReceivedTaskEvent[]): W
 			events: buildChatEventTrace(timeline.buffer),
 			checkpoint: checkpointHash ? { hash: checkpointHash, ts: checkpointMessage.ts } : undefined,
 			supportsCheckpointRestore: Boolean(checkpointHash),
+			branchId: normalizedBranchId,
+			branchParentSnapshotId,
+			previousSnapshotId,
 		}
 		timeline.lastSnapshot = node
 		snapshots.push({ node, order: sequence++, timestamp: snapshotTimestamp ?? 0 })
 		timeline.buffer = []
 		timeline.bufferStart = undefined
+		branchLastSnapshotId.set(normalizedBranchId, snapshotId)
 	}
 
 	for (const event of events) {
@@ -159,7 +185,8 @@ export function buildWorkflowNodesFromTaskEvents(events: ReceivedTaskEvent[]): W
 					}
 					const checkpointHash = getCheckpointHash(clineMessage)
 					if (checkpointHash) {
-						createSnapshot(primaryNode, clineMessage)
+						const branchId = event.branchId ?? DEFAULT_WORKFLOW_BRANCH_ID
+						createSnapshot(primaryNode, clineMessage, branchId)
 					}
 				}
 				break

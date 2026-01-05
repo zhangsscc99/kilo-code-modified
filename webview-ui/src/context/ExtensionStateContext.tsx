@@ -14,6 +14,8 @@ import {
 	type CloudOrganizationMembership,
 	ORGANIZATION_ALLOW_ALL,
 	DEFAULT_CHECKPOINT_TIMEOUT_SECONDS,
+	RooCodeEventName,
+	type ClineMessage,
 } from "@roo-code/types"
 
 import { ExtensionMessage, ExtensionState, MarketplaceInstalledMetadata, Command } from "@roo/ExtensionMessage"
@@ -31,6 +33,11 @@ import { vscode } from "@src/utils/vscode"
 import { convertTextMateToHljs } from "@src/utils/textMateToHljs"
 import { ClineRulesToggles } from "@roo/cline-rules" // kilocode_change
 import type { ReceivedTaskEvent } from "@/types/taskEvents"
+import {
+	DEFAULT_WORKFLOW_BRANCH_ID,
+	getCheckpointHash,
+	type WorkflowBranchMetadata,
+} from "@/utils/taskEventGraph"
 
 interface WorkflowRestoreErrorState {
 	snapshotId: string
@@ -41,6 +48,11 @@ export interface WorkflowRestoreStateSnapshot {
 	pendingSnapshotId: string | null
 	lastCompletedSnapshotId: string | null
 	lastError: WorkflowRestoreErrorState | null
+}
+
+export interface WorkflowBranchInfo extends WorkflowBranchMetadata {
+	status: "active" | "archived"
+	latestSnapshotId?: string
 }
 
 export interface ExtensionStateContextType extends ExtensionState {
@@ -92,8 +104,13 @@ export interface ExtensionStateContextType extends ExtensionState {
 	// kilocode_change start
 	commands: Command[]
 	taskEvents: ReceivedTaskEvent[]
+	workflowBranches: WorkflowBranchInfo[]
+	activeWorkflowBranchId: string
 	workflowRestoreState: WorkflowRestoreStateSnapshot
-	requestWorkflowNodeRestore: (payload: WorkflowNodeRestorePayload) => void
+	requestWorkflowNodeRestore: (
+		payload: WorkflowNodeRestorePayload,
+		metadata?: { branchId?: string },
+	) => void
 	organizationAllowList: OrganizationAllowList
 	organizationSettingsVersion: number
 	cloudIsAuthenticated: boolean
@@ -381,13 +398,27 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 	const [filePaths, setFilePaths] = useState<string[]>([])
 	const [openedTabs, setOpenedTabs] = useState<Array<{ label: string; isActive: boolean; path?: string }>>([])
 	const [commands, setCommands] = useState<Command[]>([])
+	const createDefaultWorkflowBranch = () => ({
+		id: DEFAULT_WORKFLOW_BRANCH_ID,
+		label: "Branch A",
+		parentSnapshotId: null,
+		parentBranchId: null,
+		createdAt: Date.now(),
+		status: "active" as const,
+	})
+	const [workflowBranches, setWorkflowBranches] = useState<WorkflowBranchInfo[]>(() => [createDefaultWorkflowBranch()])
+	const [activeWorkflowBranchId, setActiveWorkflowBranchId] = useState(DEFAULT_WORKFLOW_BRANCH_ID)
+	const activeWorkflowBranchIdRef = useRef(DEFAULT_WORKFLOW_BRANCH_ID)
+	const workflowBranchCounterRef = useRef(1)
+	const snapshotBranchAssignmentRef = useRef<Record<string, string>>({})
+	const taskSnapshotCounterRef = useRef<Record<string, number>>({})
 	const [taskEvents, setTaskEvents] = useState<ReceivedTaskEvent[]>([])
 	const [workflowRestoreState, setWorkflowRestoreState] = useState<WorkflowRestoreStateSnapshot>({
 		pendingSnapshotId: null,
 		lastCompletedSnapshotId: null,
 		lastError: null,
 	})
-	const workflowRestoreRequestsRef = useRef<Record<string, WorkflowNodeRestorePayload>>({})
+	const workflowRestoreRequestsRef = useRef<Record<string, { payload: WorkflowNodeRestorePayload; branchId?: string }>>({})
 	const [mcpServers, setMcpServers] = useState<McpServer[]>([])
 	const [mcpMarketplaceCatalog, setMcpMarketplaceCatalog] = useState<McpMarketplaceCatalog>({ items: [] }) // kilocode_change
 	const [currentCheckpoint, setCurrentCheckpoint] = useState<string>()
@@ -425,15 +456,91 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 		}))
 	}, [])
 
-	const requestWorkflowNodeRestore = useCallback((payload: WorkflowNodeRestorePayload) => {
-		workflowRestoreRequestsRef.current[payload.snapshotId] = payload
+	useEffect(() => {
+		activeWorkflowBranchIdRef.current = activeWorkflowBranchId
+	}, [activeWorkflowBranchId])
+
+	const allocateBranchLabel = useCallback(() => {
+		const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+		const index = workflowBranchCounterRef.current % alphabet.length
+		const cycle = Math.floor(workflowBranchCounterRef.current / alphabet.length)
+		workflowBranchCounterRef.current += 1
+		const base = alphabet[index]
+		return cycle === 0 ? `Branch ${base}` : `Branch ${base}-${cycle + 1}`
+	}, [])
+
+	const isForwardedMessagePayload = (value: unknown): value is { message?: ClineMessage } => {
+		return typeof value === "object" && value !== null && "message" in value
+	}
+
+	const registerCheckpointSnapshot = useCallback((eventPayload: ReceivedTaskEvent) => {
+		if (eventPayload.eventName !== RooCodeEventName.Message) {
+			return
+		}
+		const payload = eventPayload.payload[0]
+		if (!isForwardedMessagePayload(payload) || !payload.message) {
+			return
+		}
+		const checkpointHash = getCheckpointHash(payload.message)
+		if (!checkpointHash) {
+			return
+		}
+		const branchId = eventPayload.branchId ?? activeWorkflowBranchIdRef.current ?? DEFAULT_WORKFLOW_BRANCH_ID
+		const taskIdentifier = eventPayload.taskIdentifier ?? (eventPayload.taskId !== undefined ? String(eventPayload.taskId) : undefined)
+		if (!taskIdentifier) {
+			return
+		}
+		const nextIndex = (taskSnapshotCounterRef.current[taskIdentifier] ?? 0) + 1
+		taskSnapshotCounterRef.current[taskIdentifier] = nextIndex
+		const snapshotId = `${taskIdentifier}#${nextIndex}`
+		snapshotBranchAssignmentRef.current[snapshotId] = branchId
+		setWorkflowBranches((prev) =>
+			prev.map((branch) => (branch.id === branchId ? { ...branch, latestSnapshotId: snapshotId } : branch)),
+		)
+	}, [])
+
+	const createBranchFromSnapshot = useCallback(
+		(snapshotId: string, sourceBranchId?: string) => {
+			const timestamp = Date.now()
+			const originBranchId = sourceBranchId ?? activeWorkflowBranchIdRef.current ?? DEFAULT_WORKFLOW_BRANCH_ID
+			const branchOrdinal = workflowBranchCounterRef.current
+			const label = allocateBranchLabel()
+			const newBranchId = `branch-${timestamp}-${branchOrdinal}`
+			const newBranch: WorkflowBranchInfo = {
+				id: newBranchId,
+				label,
+				parentSnapshotId: snapshotId,
+				parentBranchId: originBranchId,
+				createdAt: timestamp,
+				status: "active",
+			}
+			setWorkflowBranches((prev) => {
+				const archived = prev.map((branch) =>
+					branch.status === "active" ? { ...branch, status: "archived" as const } : branch,
+				)
+				return [...archived, newBranch]
+			})
+			setActiveWorkflowBranchId(newBranchId)
+			return newBranchId
+		},
+		[allocateBranchLabel],
+	)
+
+	const requestWorkflowNodeRestore = useCallback(
+		(payload: WorkflowNodeRestorePayload, metadata?: { branchId?: string }) => {
+			workflowRestoreRequestsRef.current[payload.snapshotId] = {
+				payload,
+				branchId: metadata?.branchId ?? activeWorkflowBranchIdRef.current ?? DEFAULT_WORKFLOW_BRANCH_ID,
+			}
 		setWorkflowRestoreState({
 			pendingSnapshotId: payload.snapshotId,
 			lastCompletedSnapshotId: null,
 			lastError: null,
 		})
 		vscode.postMessage({ type: "workflowNodeRestore", payload })
-	}, [])
+		},
+		[],
+	)
 
 	const handleMessage = useCallback(
 		(event: MessageEvent) => {
@@ -505,10 +612,13 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 				}
 				case "taskEvent": {
 					if (message.taskEvent) {
+						const branchId = activeWorkflowBranchIdRef.current ?? DEFAULT_WORKFLOW_BRANCH_ID
 						const eventPayload: ReceivedTaskEvent = {
 							...message.taskEvent,
 							taskEventTimestamp: message.taskEventTimestamp ?? Date.now(),
+							branchId,
 						}
+						registerCheckpointSnapshot(eventPayload)
 						setTaskEvents((prev) => [...prev, eventPayload].slice(-500))
 					}
 					break
@@ -516,7 +626,7 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 				case "workflowNodeRestoreResult": {
 					const result = message.workflowNodeRestoreResult
 					if (result) {
-						const storedPayload = workflowRestoreRequestsRef.current[result.snapshotId]
+						const storedRequest = workflowRestoreRequestsRef.current[result.snapshotId]
 						delete workflowRestoreRequestsRef.current[result.snapshotId]
 						setWorkflowRestoreState({
 							pendingSnapshotId: null,
@@ -526,16 +636,19 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 									? { snapshotId: result.snapshotId, message: result.error ?? "恢复失败" }
 									: null,
 						})
-						if (result.status === "success" && storedPayload) {
-							const cutoffTs = storedPayload.checkpointTs ?? storedPayload.snapshotTs
-							if (cutoffTs) {
-								setTaskEvents((prev) => prev.filter((event) => event.taskEventTimestamp <= cutoffTs))
-								setState((prevState) => ({
-									...prevState,
-									clineMessages: prevState.clineMessages.filter(
-										(clineMessage) => !clineMessage.ts || clineMessage.ts <= cutoffTs,
-									),
-								}))
+						if (result.status === "success") {
+							const sourceBranchId = storedRequest?.branchId ?? snapshotBranchAssignmentRef.current[result.snapshotId]
+							createBranchFromSnapshot(result.snapshotId, sourceBranchId)
+							if (storedRequest) {
+								const cutoffTs = storedRequest.payload.checkpointTs ?? storedRequest.payload.snapshotTs
+								if (cutoffTs) {
+									setState((prevState) => ({
+										...prevState,
+										clineMessages: prevState.clineMessages.filter(
+											(clineMessage) => !clineMessage.ts || clineMessage.ts <= cutoffTs,
+										),
+									}))
+								}
 							}
 						}
 					}
@@ -641,6 +754,8 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 		// kilocode_change end
 		commands,
 		taskEvents,
+		workflowBranches,
+		activeWorkflowBranchId,
 		workflowRestoreState,
 		requestWorkflowNodeRestore,
 		soundVolume: state.soundVolume,

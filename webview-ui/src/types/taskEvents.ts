@@ -6,4 +6,5 @@ export interface ReceivedTaskEvent {
 	taskId?: number
 	taskIdentifier?: string
 	taskEventTimestamp: number
+	branchId?: string
 }

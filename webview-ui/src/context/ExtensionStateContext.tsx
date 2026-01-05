@@ -619,7 +619,7 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 							branchId,
 						}
 						registerCheckpointSnapshot(eventPayload)
-						setTaskEvents((prev) => [...prev, eventPayload].slice(-500))
+						setTaskEvents((prev) => [...prev, eventPayload])
 					}
 					break
 				}

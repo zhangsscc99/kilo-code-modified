@@ -94,4 +94,30 @@
 - **后续可扩展项**
   1. 在 `workflowBranches` 中记录用户可见颜色/徽章，让 DAG 视图或节点列表能快速区分不同分支。
   2. 加入分支归档/重命名/删除 API，并把这些操作同步到扩展端的历史存档。
-  3. 复用 checkpoint diff 能力提供分支对比（例如 Branch A vs Branch B 的文件差异），方便挑选合适的分支继续推演。
+ 3. 复用 checkpoint diff 能力提供分支对比（例如 Branch A vs Branch B 的文件差异），方便挑选合适的分支继续推演。
+
+### 已知问题排查记录：节点"消失"原因
+
+- **症状**：长时间生成或多次回溯后，Workflow 面板里较早的 checkpoint 节点会从列表/树视图中逐渐消失，仿佛被“吃掉”。
+- **根因**：`ExtensionStateContext` 维护 `taskEvents` 时曾用 `setTaskEvents((prev) => [...prev, eventPayload].slice(-500))`（`webview-ui/src/context/ExtensionStateContext.tsx`）。当事件总数超过 500 条时，最旧的事件被裁剪，而 `buildWorkflowNodesFromTaskEvents` 又完全依赖这些事件重建节点，导致被裁掉的 checkpoint 再也无法渲染。
+- **修复**：移除该裁剪逻辑，改为 `setTaskEvents((prev) => [...prev, eventPayload])` 保留完整事件流。必要时可在未来实现更细粒度的压缩（例如仅对非 checkpoint 消息做归档），但不能丢掉生成节点所需的事件。
+- **验证**：重新运行 `cd webview-ui && pnpm test src/components/chat/__tests__/WorkflowPanel.spec.tsx src/utils/__tests__/taskEventGraph.spec.ts`，并在真实任务中确认历史 checkpoint 不再随时间消失。
+
+### 分支如何创建与归属？
+
+1. **分支元数据 (`workflowBranches`)**：
+   - 默认只有 `Branch A`。当用户在 Workflow 面板点击“回溯到 checkpoint”且扩展回溯成功时，`createBranchFromSnapshot` 会根据被点击节点的 `snapshotId` / `branchId` 创建新分支，记录 `parentSnapshotId`（从哪个 checkpoint 分叉）和 `parentBranchId`（从哪条分支分叉），并把旧分支标记为 `archived`、新分支设为 `active`。
+   - **设计解释**：Workflow 的核心诉求正是“回溯某个 checkpoint，再基于它继续生成”。因此回溯行为天然就是“新分支的起点”。让每次回溯都派生一条 branch，既符合用户心智（清楚知道是从哪个 checkpoint 重新起步），也能保证整棵树是自洽的 DAG，而无需额外的用户操作开关。
+2. **事件带上 branchId**：
+   - Webview 每收到一个 `taskEvent`，都会附带当前的 `activeWorkflowBranchId` 写入 `event.branchId`，同时在 `snapshotBranchAssignmentRef` 里维护 snapshot → branch 的映射。这样 `buildWorkflowNodesFromTaskEvents` 可以把构建出的节点与分支一一对应。
+3. **回溯时如何知道“要开新 branch”**：
+   - UI 调用 `requestWorkflowNodeRestore` 时会连同 `metadata.branchId` 一起发送；扩展回溯成功后，前端根据之前存的 `{ snapshotId, branchId }` 调用 `createBranchFromSnapshot`，于是出现一条新的 `workflowBranches` 记录。
+   - 同时 `activeWorkflowBranchId` 被切换到新分支，后续扩展推送的 `taskEvent` 自然归属这条新链。
+4. **节点归属展示**：
+   - “单分支”时间线直接用 `node.branchId` 过滤。
+   - “全部分支”树视图则利用 `node.previousSnapshotId`（同 branch 的直线链）和 `node.branchParentSnapshotId`（从父节点分叉），绘制真正的树状结构，并在节点卡片上显示 `Branch · <label> + hash`，点击节点即可跳回对应 branch 的时间线。
+
+#### 设计确认对话纪要（2024-XX）
+
+- **问题**：只要回溯就自动开新分支，这样的设计是否合理？
+- **结论**：正如上文所述，回溯本来就是为了“基于旧 checkpoint 继续生成”，因此把回溯视为新 branch 的起点完全符合初衷，也让树结构与实际操作一致。无需额外开关或额外提示，只要在 Workflow 面板里明示“你正从 checkpoint X 分叉”，用户就能理解整个分支体系。

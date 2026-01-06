@@ -1,0 +1,28 @@
+# Files modified by Yuting Wang (excluding images/docs)
+
+- "images/\345\276\256\344\277\241\345\233\276\347\211\207_2025-12-29_200948_257.png"
+- "images/\345\276\256\344\277\241\345\233\276\347\211\207_2025-12-29_200958_720.jpg"
+- "images/\345\276\256\344\277\241\345\233\276\347\211\207_2025-12-29_201009_576.jpg"
+- "images/\345\276\256\344\277\241\345\233\276\347\211\207_2025-12-29_201015_480.jpg"
+- "images/\345\276\256\344\277\241\345\233\276\347\211\207_2025-12-30_193828_395.png"
+- "images/\345\276\256\344\277\241\345\233\276\347\211\207_2025-12-30_211428_297.jpg"
+- "images/\345\276\256\344\277\241\345\233\276\347\211\207_20251230192129_1577.png"
+- "images/\345\276\256\344\277\241\345\233\276\347\211\207_2026-01-03_170822_826.jpg"
+- "images/\345\276\256\344\277\241\345\233\276\347\211\207_2026-01-05_120038_792.png"
+- "images/\345\276\256\344\277\241\345\233\276\347\211\207_2026-01-05_143753_495.png"
+- "images/\345\276\256\344\277\241\345\233\276\347\211\207_2026-01-05_143758_312.png"
+- src/core/webview/ClineProvider.ts
+- src/core/webview/__tests__/webviewMessageHandler.checkpoint.spec.ts
+- src/core/webview/webviewMessageHandler.ts
+- src/shared/ExtensionMessage.ts
+- src/shared/WebviewMessage.ts
+- webview-ui/src/components/chat/ChatEventTrace.tsx
+- webview-ui/src/components/chat/ChatTextArea.tsx
+- webview-ui/src/components/chat/ChatView.tsx
+- webview-ui/src/components/chat/WorkflowPanel.tsx
+- webview-ui/src/components/chat/__tests__/ChatEventTrace.spec.tsx
+- webview-ui/src/components/chat/__tests__/WorkflowPanel.spec.tsx
+- webview-ui/src/context/ExtensionStateContext.tsx
+- webview-ui/src/types/taskEvents.ts
+- webview-ui/src/utils/__tests__/taskEventGraph.spec.ts
+- webview-ui/src/utils/taskEventGraph.ts

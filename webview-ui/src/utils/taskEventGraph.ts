@@ -20,6 +20,7 @@ export interface WorkflowGraphNode {
 	branchId: string
 	branchParentSnapshotId?: string | null
 	previousSnapshotId?: string
+	userMessage?: ClineMessage
 }
 
 export interface WorkflowBranchMetadata {
@@ -33,6 +34,7 @@ export interface WorkflowBranchMetadata {
 export const DEFAULT_WORKFLOW_BRANCH_ID = "branch-main"
 
 const UNKNOWN_TASK_ID = "unknown-task"
+const USER_MESSAGE_SAY_TYPES = new Set(["user_feedback", "user_feedback_diff"])
 
 interface TaskTimeline {
 	id: string
@@ -45,6 +47,8 @@ interface TaskTimeline {
 	messages: ClineMessage[]
 	buffer: ClineMessage[]
 	bufferStart?: number
+	bufferIncludesLastUser: boolean
+	lastUserMessage?: ClineMessage
 	stepCounter: number
 	lastSnapshot?: WorkflowGraphNode
 }
@@ -61,6 +65,21 @@ function ensureString(value: unknown): string | undefined {
 
 function isMessagePayload(value: unknown): value is ForwardedMessagePayload {
 	return typeof value === "object" && value !== null && "message" in value
+}
+
+function isUserMessage(message?: ClineMessage) {
+	if (!message) {
+		return false
+	}
+	const say = message.say as string | undefined
+	const ask = message.ask as string | undefined
+	if (say && USER_MESSAGE_SAY_TYPES.has(say)) {
+		return true
+	}
+	if (ask && USER_MESSAGE_SAY_TYPES.has(ask)) {
+		return true
+	}
+	return false
 }
 
 export function getCheckpointHash(message?: ClineMessage) {
@@ -96,6 +115,7 @@ export function buildWorkflowNodesFromTaskEvents(
 				childIds: new Set<string>(),
 				messages: [],
 				buffer: [],
+				bufferIncludesLastUser: false,
 				stepCounter: 0,
 			}
 			nodeMap.set(id, node)
@@ -116,6 +136,9 @@ export function buildWorkflowNodesFromTaskEvents(
 		const previousSnapshotId = branchLastSnapshotId.get(normalizedBranchId) ?? branchInfo?.parentSnapshotId ?? undefined
 		const isFirstInBranch = !branchLastSnapshotId.get(normalizedBranchId)
 		const branchParentSnapshotId = isFirstInBranch ? branchInfo?.parentSnapshotId ?? null : undefined
+		const includeInitialMessage = Boolean(timeline.lastUserMessage)
+		const needsUserPrefill = Boolean(includeInitialMessage && !timeline.bufferIncludesLastUser && timeline.lastUserMessage)
+		const traceSource = needsUserPrefill ? [timeline.lastUserMessage!, ...timeline.buffer] : timeline.buffer
 		const node: WorkflowGraphNode = {
 			id: snapshotId,
 			taskId: timeline.id,
@@ -127,17 +150,22 @@ export function buildWorkflowNodesFromTaskEvents(
 			snapshotTs: snapshotTimestamp,
 			parentIds: Array.from(timeline.parentIds),
 			childIds: Array.from(timeline.childIds),
-			events: buildChatEventTrace(timeline.buffer),
+			events: buildChatEventTrace(
+				traceSource,
+				includeInitialMessage ? { includeInitialMessage: true } : undefined,
+			),
 			checkpoint: checkpointHash ? { hash: checkpointHash, ts: checkpointMessage.ts } : undefined,
 			supportsCheckpointRestore: Boolean(checkpointHash),
-			branchId: normalizedBranchId,
-			branchParentSnapshotId,
-			previousSnapshotId,
+				branchId: normalizedBranchId,
+				branchParentSnapshotId,
+				previousSnapshotId,
+				userMessage: timeline.lastUserMessage,
 		}
 		timeline.lastSnapshot = node
 		snapshots.push({ node, order: sequence++, timestamp: snapshotTimestamp ?? 0 })
 		timeline.buffer = []
 		timeline.bufferStart = undefined
+		timeline.bufferIncludesLastUser = false
 		branchLastSnapshotId.set(normalizedBranchId, snapshotId)
 	}
 
@@ -177,6 +205,10 @@ export function buildWorkflowNodesFromTaskEvents(
 					const clineMessage = payload.message
 					primaryNode.messages.push(clineMessage)
 					primaryNode.buffer.push(clineMessage)
+					if (isUserMessage(clineMessage)) {
+						primaryNode.lastUserMessage = clineMessage
+						primaryNode.bufferIncludesLastUser = true
+					}
 					if (!primaryNode.bufferStart || (clineMessage.ts && clineMessage.ts < primaryNode.bufferStart)) {
 						primaryNode.bufferStart = clineMessage.ts ?? event.taskEventTimestamp
 					}

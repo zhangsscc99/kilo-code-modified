@@ -34,6 +34,13 @@ describe("ChatEventTrace", () => {
 		expect(timestamps).toEqual(sorted)
 	})
 
+	it("can include the initial message when requested", () => {
+		const events = buildChatEventTrace(sampleMessages, { includeInitialMessage: true })
+		expect(events[0].title).toContain("Agent")
+		expect(events[0].timestamp).toBe(sampleMessages[0].ts)
+		expect(events).toHaveLength(6)
+	})
+
 	it("renders placeholders when no messages are available", () => {
 		render(<ChatEventTrace messages={[]} />)
 		expect(screen.getByTestId("chat-event-trace")).toBeInTheDocument()

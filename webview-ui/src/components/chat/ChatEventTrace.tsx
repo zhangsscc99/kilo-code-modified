@@ -146,9 +146,13 @@ function formatRelativeTime(timestamp: number, baseTimestamp: number): string {
 	return `+${minutes}m ${seconds}s`
 }
 
-function buildEventFromMessage(message: ClineMessage, index: number): ChatTraceEvent | null {
+interface BuildEventOptions {
+	includeInitialMessage?: boolean
+}
+
+function buildEventFromMessage(message: ClineMessage, index: number, options?: BuildEventOptions): ChatTraceEvent | null {
 	if (!message || typeof message.ts !== "number") return null
-	if (index === 0) return null
+	if (!options?.includeInitialMessage && index === 0) return null
 
 	const baseEvent: Omit<ChatTraceEvent, "type"> = {
 		id: `${message.ts}-${message.type}-${index}`,
@@ -221,7 +225,11 @@ function buildEventFromMessage(message: ClineMessage, index: number): ChatTraceE
 	return null
 }
 
-export function buildChatEventTrace(messages: ClineMessage[]): ChatTraceEvent[] {
+interface BuildChatEventTraceOptions {
+	includeInitialMessage?: boolean
+}
+
+export function buildChatEventTrace(messages: ClineMessage[], options?: BuildChatEventTraceOptions): ChatTraceEvent[] {
 	if (!Array.isArray(messages)) return []
 
 	const events: ChatTraceEvent[] = []
@@ -229,7 +237,7 @@ export function buildChatEventTrace(messages: ClineMessage[]): ChatTraceEvent[] 
 	const agentStreamingKeys = new Set<string>()
 
 	messages.forEach((message, index) => {
-		const event = buildEventFromMessage(message, index)
+		const event = buildEventFromMessage(message, index, options)
 		if (!event) {
 			return
 		}

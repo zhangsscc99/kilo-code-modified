@@ -1,15 +1,16 @@
-import { useEffect, useMemo, useState, useRef, useCallback } from "react"
+import { useEffect, useMemo, useState, useRef, useCallback, memo } from "react"
 import type { PointerEvent as ReactPointerEvent } from "react"
 import type { ClineMessage } from "@roo-code/types"
 import { StandardTooltip } from "../ui"
 import { Minus, Square, X } from "lucide-react"
-import { buildChatEventTrace, type ChatEventType } from "./ChatEventTrace"
+import { buildChatEventTrace, type ChatEventType, type ChatTraceEvent } from "./ChatEventTrace"
 import { cn } from "@/lib/utils"
 import {
 	buildWorkflowNodesFromTaskEvents,
 	type WorkflowGraphNode,
 	type WorkflowBranchMetadata,
 } from "@/utils/taskEventGraph"
+import { buildEnhancedWorkflowEvents } from "@/utils/workflowNodeEvents"
 import type { ReceivedTaskEvent } from "@/types/taskEvents"
 import type { WorkflowNodeRestorePayload } from "@roo/WebviewMessage"
 import type { WorkflowRestoreStateSnapshot, WorkflowBranchInfo } from "@/context/ExtensionStateContext"
@@ -87,6 +88,7 @@ export function WorkflowPanel({
 	const [agentStateHistory, setAgentStateHistory] = useState<AgentStateSummary[]>([])
 	const [activeNodeId, setActiveNodeId] = useState<string | null>(null)
 	const [selectedBranchId, setSelectedBranchId] = useState<string>(activeBranchId)
+	const [nodeEventViewModes, setNodeEventViewModes] = useState<Record<string, "default" | "enhanced">>({})
 	useEffect(() => {
 		setSelectedBranchId((prev) => (prev === ALL_BRANCHES_ID ? prev : activeBranchId))
 	}, [activeBranchId])
@@ -336,6 +338,24 @@ export function WorkflowPanel({
 
 	const renderWorkflowNode = useCallback(
 		(node: WorkflowGraphNode, idx: number, total: number) => {
+			const eventViewMode = nodeEventViewModes[node.id] ?? "default"
+			const updateNodeEventMode = (mode: "default" | "enhanced") => {
+				setNodeEventViewModes((prev) => {
+					const current = prev[node.id] ?? "default"
+					if (current === mode) {
+						return prev
+					}
+					if (mode === "default") {
+						if (!(node.id in prev)) {
+							return prev
+						}
+						const next = { ...prev }
+						delete next[node.id]
+						return next
+					}
+					return { ...prev, [node.id]: mode }
+				})
+			}
 			const stroke = getNodeColor(node)
 			const duration = node.startedAt && node.completedAt ? node.completedAt - node.startedAt : undefined
 			const isActive = activeNodeId === node.id
@@ -436,27 +456,47 @@ export function WorkflowPanel({
 							{!nodeError && recentRestore && (
 								<p className="mb-2 text-[11px] text-[var(--vscode-charts-green)]">已回溯到该节点</p>
 							)}
-							<p className="text-vscode-descriptionForeground">内部事件</p>
-							{node.events.length === 0 && <p className="text-vscode-descriptionForeground">无工具/Hook 活动</p>}
-							{node.events.map((event) => (
-								<div key={event.id} className="mb-2 last:mb-0">
-									<div className="flex items-center justify-between">
-										<p className="font-medium text-vscode-editor-foreground">{event.title}</p>
-										<span className="text-[10px] text-vscode-descriptionForeground">{formatTimestamp(event.timestamp)}</span>
+							<div className="mt-3">
+								<div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs text-vscode-descriptionForeground">
+									<p>{eventViewMode === "enhanced" ? "内部事件（增强版）" : "内部事件"}</p>
+									<div className="inline-flex overflow-hidden rounded-full border border-vscode-panel-border">
+										<button
+											type="button"
+											onClick={() => updateNodeEventMode("default")}
+											className={cn(
+												"px-2 py-0.5 text-[11px] border border-transparent transition-colors hover:border-[var(--vscode-focusBorder)]",
+												eventViewMode === "default"
+													? "bg-[color-mix(in_srgb,var(--vscode-editor-background)_90%,var(--vscode-focusBorder)_20%)] text-vscode-editor-foreground"
+													: "bg-transparent text-vscode-descriptionForeground",
+											)}>
+											默认
+										</button>
+										<button
+											type="button"
+											onClick={() => updateNodeEventMode("enhanced")}
+											className={cn(
+												"px-2 py-0.5 text-[11px] border border-transparent transition-colors hover:border-[var(--vscode-focusBorder)]",
+												eventViewMode === "enhanced"
+													? "bg-[color-mix(in_srgb,var(--vscode-editor-background)_90%,var(--vscode-focusBorder)_20%)] text-vscode-editor-foreground"
+													: "bg-transparent text-vscode-descriptionForeground",
+											)}>
+											增强版
+										</button>
 									</div>
-									{event.detail && <p className="text-vscode-descriptionForeground">{event.detail}</p>}
-									{event.sourceMessage && (
-										<pre className="mt-1 max-h-40 overflow-auto rounded bg-[color-mix(in_srgb,var(--vscode-editor-background)_98%,var(--vscode-panel-border))] p-2 text-[11px] text-vscode-editor-foreground">
-											{JSON.stringify(event.sourceMessage, null, 2)}
-										</pre>
-									)}
 								</div>
-							))}
+
+								<div className={eventViewMode === "default" ? "block" : "hidden"}>
+									<DefaultNodeEvents events={node.events} />
+								</div>
+								<div className={eventViewMode === "enhanced" ? "block" : "hidden"}>
+									<EnhancedNodeEvents node={node} />
+								</div>
+							</div>
 						</div>
 					)}
 				</div>
 			)
-	}, [activeNodeId, branchMap, currentCheckpoint, onRestoreNode, workflowRestoreState])
+	}, [activeNodeId, branchMap, currentCheckpoint, nodeEventViewModes, onRestoreNode, workflowRestoreState])
 
 	return (
 		<div className="fixed bottom-28 right-4 z-40 text-sm">
@@ -844,4 +884,154 @@ function formatTimestamp(ts?: number) {
 	if (!ts) return "-"
 	const date = new Date(ts)
 	return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+}
+
+function DefaultNodeEvents({ events }: { events: ChatTraceEvent[] }) {
+	if (events.length === 0) {
+		return <p className="text-vscode-descriptionForeground">无工具/Hook 活动</p>
+	}
+
+	return (
+		<>
+			{events.map((event) => (
+				<div key={event.id} className="mb-2 last:mb-0">
+					<div className="flex items-center justify之间">
+						<p className="font-medium text-vscode-editor-foreground">{event.title}</p>
+						<span className="text-[10px] text-vscode-descriptionForeground">{formatTimestamp(event.timestamp)}</span>
+					</div>
+					{event.detail && <p className="text-vscode-descriptionForeground">{event.detail}</p>}
+					{event.sourceMessage && (
+						<pre className="mt-1 max-h-40 overflow-auto rounded bg-[color-mix(in_srgb,var(--vscode-editor-background)_98%,var(--vscode-panel-border))] p-2 text-[11px] text-vscode-editor-foreground">
+							{JSON.stringify(event.sourceMessage, null, 2)}
+						</pre>
+					)}
+				</div>
+			))}
+		</>
+	)
+}
+
+function EnhancedNodeEvents({ node }: { node: WorkflowGraphNode }) {
+	const data = useMemo(() => buildEnhancedWorkflowEvents(node), [node])
+	const stats = data.stats
+
+	return (
+		<div className="space-y-4 text-[11px]">
+				<div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+					<EnhancedStat label="工具次数" value={stats.toolCount} />
+					<EnhancedStat label="工具成功" value={stats.toolSuccessCount} />
+					<EnhancedStat label="工具失败" value={stats.toolFailureCount} />
+					<EnhancedStat label="Hook 次数" value={stats.hookCount} />
+					<EnhancedStat label="子任务" value={stats.subagentCount} />
+					<EnhancedStat label="Agent 事件" value={stats.agentCount} />
+					<EnhancedStat label="Token 输入" value={stats.totalTokensIn} />
+					<EnhancedStat label="Token 输出" value={stats.totalTokensOut} />
+					{typeof stats.durationMs === "number" && <EnhancedStat label="持续时间" value={formatDuration(stats.durationMs)} />}
+				</div>
+
+			{data.toolEvents.length > 0 && (
+				<section>
+					<p className="mb-1 text-xs font-semibold text-vscode-descriptionForeground">工具事件</p>
+					<div className="space-y-2">
+						{data.toolEvents.map((event) => (
+							<div key={event.id} className="rounded-lg border border-vscode-panel-border bg-[color-mix(in_srgb,var(--vscode-editor-background)_98%,var(--vscode-panel-border))] p-3">
+								<div className="mb-1 flex items-center justify-between text-[10px] uppercase tracking-widest text-vscode-descriptionForeground">
+									<span>{event.status ?? "TOOL"}</span>
+									{event.timestamp && <span>{formatTimestamp(event.timestamp)}</span>}
+								</div>
+								<p className="text-sm font-medium text-vscode-editor-foreground">{event.name ?? event.action ?? "Tool event"}</p>
+								{event.detail && <p className="text-[11px] text-vscode-descriptionForeground">{event.detail}</p>}
+								{(event.tokensIn || event.tokensOut) && (
+									<p className="mt-1 text-[10px] text-vscode-descriptionForeground">Token 输入 {event.tokensIn ?? 0} / 输出 {event.tokensOut ?? 0}</p>
+								)}
+							</div>
+						))}
+					</div>
+				</section>
+			)}
+
+			{data.hookEvents.length > 0 && (
+				<section>
+					<p className="mb-1 text-xs font-semibold text-vscode-descriptionForeground">Hook 事件</p>
+					<div className="space-y-2">
+						{data.hookEvents.map((event) => (
+							<div key={event.id} className="rounded-lg border border-vscode-panel-border bg-[color-mix(in_srgb,var(--vscode-editor-background)_98%,var(--vscode-panel-border))] p-3">
+								<div className="mb-1 flex items-center justify-between text-[10px] uppercase tracking-widest text-vscode-descriptionForeground">
+									<span>{event.status ?? "HOOK"}</span>
+									{event.timestamp && <span>{formatTimestamp(event.timestamp)}</span>}
+								</div>
+								<p className="text-sm font-medium text-vscode-editor-foreground">{event.name}</p>
+								{event.detail && <p className="text-[11px] text-vscode-descriptionForeground">{event.detail}</p>}
+								{(event.tokensIn || event.tokensOut) && (
+									<p className="mt-1 text-[10px] text-vscode-descriptionForeground">Token 输入 {event.tokensIn ?? 0} / 输出 {event.tokensOut ?? 0}</p>
+								)}
+							</div>
+						))}
+					</div>
+				</section>
+			)}
+
+			{data.userEvents.length > 0 && (
+				<section>
+					<p className="mb-1 text-xs font-semibold text-vscode-descriptionForeground">用户输入</p>
+					<div className="space-y-2">
+						{data.userEvents.map((event) => (
+							<div key={event.id} className="rounded-lg border border-vscode-panel-border/80 bg-[color-mix(in_srgb,var(--vscode-editor-background)_98%,var(--vscode-panel-border))] p-3">
+								<div className="mb-1 flex items-center justify-between text-[10px] text-vscode-descriptionForeground">
+									<span>{event.label}</span>
+									{event.timestamp && <span>{formatTimestamp(event.timestamp)}</span>}
+								</div>
+								<p className="text-sm text-vscode-editor-foreground">{event.text ?? "（无用户输入文本）"}</p>
+							</div>
+						))}
+					</div>
+				</section>
+			)}
+
+			{data.agentEvents.length > 0 && (
+				<section>
+					<p className="mb-1 text-xs font-semibold text-vscode-descriptionForeground">Agent 输出</p>
+					<div className="space-y-2">
+						{data.agentEvents.map((event) => (
+							<div key={event.id} className="rounded-lg border border-vscode-panel-border/80 bg-[color-mix(in_srgb,var(--vscode-editor-background)_98%,var(--vscode-panel-border))] p-3">
+								<div className="mb-1 flex items-center justify之间 text-[10px] text-vscode-descriptionForeground">
+									<span>{event.label}</span>
+									{event.timestamp && <span>{formatTimestamp(event.timestamp)}</span>}
+								</div>
+								<p className="text-sm text-vscode-editor-foreground">{event.text}</p>
+							</div>
+						))}
+					</div>
+				</section>
+			)}
+
+			{data.subagentEvents.length > 0 && (
+				<section>
+					<p className="mb-1 text-xs font-semibold text-vscode-descriptionForeground">Subagent</p>
+					<div className="space-y-2">
+						{data.subagentEvents.map((event) => (
+							<div key={event.id} className="rounded-lg border border-vscode-panel-border/80 bg-[color-mix(in_srgb,var(--vscode-editor-background)_98%,var(--vscode-panel-border))] p-3">
+								<div className="mb-1 flex items-center justify-between text-[10px] text-vscode-descriptionForeground">
+									<span>{event.label}</span>
+									{event.timestamp && <span>{formatTimestamp(event.timestamp)}</span>}
+								</div>
+								<p className="text-sm text-vscode-editor-foreground">{event.text}</p>
+							</div>
+						))}
+					</div>
+				</section>
+			)}
+
+			{data.isEmpty && <p className="text-vscode-descriptionForeground">暂无增强型摘要，可切换回默认视图查看原始事件。</p>}
+		</div>
+	)
+}
+
+function EnhancedStat({ label, value }: { label: string; value: string | number }) {
+	return (
+		<div className="rounded-lg border border-vscode-panel-border/80 bg-[color-mix(in_srgb,var(--vscode-editor-background)_98%,var(--vscode-panel-border))] p-2">
+			<p className="text-[10px] uppercase tracking-widest text-vscode-descriptionForeground">{label}</p>
+			<p className="text-sm font-semibold text-vscode-editor-foreground">{value}</p>
+		</div>
+	)
 }

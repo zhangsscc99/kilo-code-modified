@@ -224,10 +224,75 @@ function buildEventFromMessage(message: ClineMessage, index: number): ChatTraceE
 export function buildChatEventTrace(messages: ClineMessage[]): ChatTraceEvent[] {
 	if (!Array.isArray(messages)) return []
 
-	return messages
-		.map((message, index) => buildEventFromMessage(message, index))
-		.filter((event): event is ChatTraceEvent => Boolean(event))
-		.sort((a, b) => a.timestamp - b.timestamp)
+	const events: ChatTraceEvent[] = []
+	const toolStreamingKeys = new Set<string>()
+	const agentStreamingKeys = new Set<string>()
+
+	messages.forEach((message, index) => {
+		const event = buildEventFromMessage(message, index)
+		if (!event) {
+			return
+		}
+
+		if (event.type === "tool") {
+			const toolPayload = getToolPayload(message)
+			const streamKey = getToolStreamKey(message, toolPayload)
+			if (streamKey && isToolPartialMessage(message, toolPayload)) {
+				toolStreamingKeys.add(streamKey)
+				return
+			}
+			if (streamKey) {
+				toolStreamingKeys.delete(streamKey)
+			}
+		}
+
+		if (event.type === "agent") {
+			const streamKey = getAgentStreamKey(message)
+			if (streamKey && isAgentPartialMessage(message)) {
+				agentStreamingKeys.add(streamKey)
+				return
+			}
+			if (streamKey) {
+				agentStreamingKeys.delete(streamKey)
+			}
+		}
+
+		events.push(event)
+	})
+
+	return events.sort((a, b) => a.timestamp - b.timestamp)
+}
+
+function getToolStreamKey(message: ClineMessage, payload?: ToolPayload) {
+	if (message.ask !== "tool") {
+		return undefined
+	}
+	return payload?.toolUseId ?? payload?.tool ?? `${message.ts}`
+}
+
+function isToolPartialMessage(message: ClineMessage, payload?: ToolPayload) {
+	if (message.partial) {
+		return true
+	}
+	if (payload && typeof payload.partial === "boolean") {
+		return payload.partial
+	}
+	const parsed = safeJsonParse<{ partial?: boolean }>(message.text ?? "", undefined)
+	return Boolean(parsed?.partial)
+}
+
+function getAgentStreamKey(message: ClineMessage) {
+	if (!message.say) {
+		return undefined
+	}
+	return `${message.ts ?? 0}-${message.say}`
+}
+
+function isAgentPartialMessage(message: ClineMessage) {
+	if (!message.partial) {
+		return false
+	}
+	return Boolean(message.say && (AGENT_SAY_TYPES.has(message.say) || message.say === "reasoning"))
 }
 
 interface ChatEventTraceProps {

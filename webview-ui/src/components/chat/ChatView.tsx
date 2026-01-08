@@ -1022,12 +1022,14 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 				case "resume_completed_task":
 					return false
 			}
-			switch (message.say) {
-				case "api_req_finished":
-				case "api_req_retried":
-				case "api_req_deleted":
-					return false
-				case "api_req_retry_delayed":
+		switch (message.say) {
+			case "api_req_finished":
+			case "api_req_retried":
+			case "api_req_deleted":
+				return false
+			case "tool_result":
+				return false
+			case "api_req_retry_delayed":
 					const last1 = modifiedMessages.at(-1)
 					const last2 = modifiedMessages.at(-2)
 					if (last1?.ask === "resume_task" && last2 === message) {

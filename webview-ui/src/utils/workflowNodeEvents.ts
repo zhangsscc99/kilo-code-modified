@@ -4,6 +4,14 @@ import type { ClineMessage } from "@roo-code/types"
 import { safeJsonParse } from "@roo/safeJsonParse"
 
 const USER_SAY_TYPES = new Set(["user_feedback", "user_feedback_diff"])
+const TOOL_INVOCATION_ASKS = new Set(["tool", "command", "browser_action_launch", "use_mcp_server"])
+const TOOL_RESULT_SAYS = new Set([
+	"command_output",
+	"tool_result",
+	"browser_action_result",
+	"mcp_server_response",
+	"codebase_search_result",
+])
 
 export interface EnhancedWorkflowEventsData {
 	stats: {
@@ -31,6 +39,7 @@ export interface EnhancedEventSummary {
 	action?: string
 	status?: string
 	outcome?: "success" | "failure"
+	kind?: "invocation" | "result" | "other"
 	detail?: string
 	tokensIn?: number
 	tokensOut?: number
@@ -87,21 +96,28 @@ export function buildEnhancedWorkflowEvents(node: WorkflowGraphNode): EnhancedWo
 		}
 
 		switch (event.type) {
-			case "tool": {
+		case "tool": {
+			if (source?.partial && isToolInvocationMessage(source)) {
+				break
+			}
+			if (toolOutcome === "success") {
+				stats.toolSuccessCount += 1
+			} else if (toolOutcome === "failure") {
+				stats.toolFailureCount += 1
+			}
+			const toolEventKind = getToolEventKind(source, toolOutcome)
+			if (toolEventKind === "invocation") {
 				stats.toolCount += 1
-				if (toolOutcome === "success") {
-					stats.toolSuccessCount += 1
-				} else if (toolOutcome === "failure") {
-					stats.toolFailureCount += 1
-				}
-				toolEvents.push({
-					id: event.id,
-					name: deriveToolName(event.title),
-					action: source?.ask || source?.say || event.title,
-					status: deriveToolStatus(source),
-					outcome: toolOutcome,
-					detail: truncateEventDetail(deriveToolDetail(event, parsed)),
-					tokensIn: tokenUsage.tokensIn,
+			}
+			toolEvents.push({
+				id: event.id,
+				name: deriveToolName(event.title),
+				action: source?.ask || source?.say || event.title,
+				status: deriveToolStatus(source),
+				outcome: toolOutcome,
+				kind: toolEventKind,
+				detail: truncateEventDetail(deriveToolDetail(event, parsed)),
+				tokensIn: tokenUsage.tokensIn,
 					tokensOut: tokenUsage.tokensOut,
 					exitCode,
 					timestamp: event.timestamp,
@@ -188,6 +204,19 @@ function appendUserPromptFromNode(node: WorkflowGraphNode, userEvents: EnhancedU
 	})
 }
 
+function getToolEventKind(message?: ClineMessage, outcome?: "success" | "failure"): "invocation" | "result" | "other" | undefined {
+	if (!message) return undefined
+	if (isToolInvocationMessage(message)) {
+		return "invocation"
+	}
+	const say = message.say as string | undefined
+	const metadata = (message as Record<string, any>).metadata as Record<string, any> | undefined
+	if (outcome || metadata?.toolStatus || typeof metadata?.success === "boolean" || (say && TOOL_RESULT_SAYS.has(say))) {
+		return "result"
+	}
+	return undefined
+}
+
 function deriveToolName(title?: string) {
 	if (!title) return undefined
 	if (title.startsWith("Tool · ")) {
@@ -225,6 +254,20 @@ function deriveToolStatus(message?: ClineMessage) {
 
 function deriveToolOutcome(message?: ClineMessage, parsed?: Record<string, any>, exitCode?: number) {
 	if (!message) return undefined
+	const metadata = (message as Record<string, any>).metadata as Record<string, any> | undefined
+	const metadataStatus = typeof metadata?.toolStatus === "string" ? metadata.toolStatus.toLowerCase() : undefined
+	if (metadataStatus) {
+		if (metadataStatus === "success" || metadataStatus === "approved" || metadataStatus === "ok") {
+			return "success"
+		}
+		if (metadataStatus === "failure" || metadataStatus === "error" || metadataStatus === "denied") {
+			return "failure"
+		}
+	}
+	const metadataSuccess = metadata?.success
+	if (typeof metadataSuccess === "boolean") {
+		return metadataSuccess ? "success" : "failure"
+	}
 	if (typeof exitCode === "number") {
 		return exitCode === 0 ? "success" : "failure"
 	}
@@ -244,7 +287,11 @@ function deriveToolOutcome(message?: ClineMessage, parsed?: Record<string, any>,
 			return "success"
 		}
 	}
-	const successFlag = (message as Record<string, any>).success ?? parsed?.success ?? parsed?.ok
+	const successFlag =
+		(message as Record<string, any>).success ??
+		metadataSuccess ??
+		parsed?.success ??
+		parsed?.ok
 	if (typeof successFlag === "boolean") {
 		return successFlag ? "success" : "failure"
 	}
@@ -317,6 +364,12 @@ function isUserFeedbackMessage(message?: ClineMessage) {
 	if (say && USER_SAY_TYPES.has(say)) return true
 	if (ask && USER_SAY_TYPES.has(ask)) return true
 	return false
+}
+
+function isToolInvocationMessage(message?: ClineMessage) {
+	if (!message) return false
+	const ask = message.ask as string | undefined
+	return Boolean(ask && TOOL_INVOCATION_ASKS.has(ask))
 }
 
 const TOKEN_INPUT_KEYS = ["tokensIn", "tokenIn", "inputTokens", "tokens_input", "tokens_in", "input_tokens"]

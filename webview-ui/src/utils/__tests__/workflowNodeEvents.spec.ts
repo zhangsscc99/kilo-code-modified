@@ -44,10 +44,10 @@ describe("buildEnhancedWorkflowEvents", () => {
 			}),
 		})
 
-		const toolResult = createEvent({
-			id: "tool-result",
-			type: "tool",
-			title: "Tool · run_script",
+			const toolResult = createEvent({
+				id: "tool-result",
+				type: "tool",
+				title: "Tool · run_script",
 			timestamp: 2,
 			sourceMessage: createMessage({
 				type: "say",
@@ -56,17 +56,28 @@ describe("buildEnhancedWorkflowEvents", () => {
 			}),
 		})
 
-		const toolError = createEvent({
-			id: "tool-error",
-			type: "tool",
-			title: "Tool · run_script",
-			timestamp: 4,
-			sourceMessage: createMessage({
-				type: "say",
-				say: "tool_error" as any,
-				metadata: { exitCode: 2 } as Record<string, any>,
-			}),
-		})
+			const secondToolCall = createEvent({
+				id: "tool-call-2",
+				type: "tool",
+				title: "Tool · run_script",
+				sourceMessage: createMessage({
+					type: "ask",
+					ask: "tool",
+					text: JSON.stringify({ tool: "run_script", command: "echo fail" }),
+				}),
+			})
+
+			const toolError = createEvent({
+				id: "tool-error",
+				type: "tool",
+				title: "Tool · run_script",
+				timestamp: 4,
+				sourceMessage: createMessage({
+					type: "say",
+					say: "tool_error" as any,
+					metadata: { exitCode: 2 } as Record<string, any>,
+				}),
+			})
 
 		const hookEvent = createEvent({
 			id: "hook",
@@ -107,15 +118,15 @@ describe("buildEnhancedWorkflowEvents", () => {
 
 			const node: WorkflowGraphNode = {
 				...baseNode,
-				events: [toolCall, toolResult, toolError, hookEvent, agentEvent, userEvent, subagentEvent],
+				events: [toolCall, toolResult, secondToolCall, toolError, hookEvent, agentEvent, userEvent, subagentEvent],
 				startedAt: 1000,
 				completedAt: 4000,
 				userMessage: userEvent.sourceMessage,
 			}
 
 		const data = buildEnhancedWorkflowEvents(node)
-		expect(data.stats).toMatchObject({
-			toolCount: 3,
+			expect(data.stats).toMatchObject({
+			toolCount: 2,
 			toolSuccessCount: 1,
 			toolFailureCount: 1,
 			hookCount: 1,
@@ -125,15 +136,17 @@ describe("buildEnhancedWorkflowEvents", () => {
 			totalTokensOut: 8,
 			durationMs: 3000,
 		})
-		expect(data.toolEvents[0]).toMatchObject({
+			expect(data.toolEvents[0]).toMatchObject({
 			name: "read_file",
 			status: "调用",
 			detail: "src/app.ts",
 			tokensIn: 10,
 			tokensOut: 3,
+			kind: "invocation",
 		})
-		expect(data.toolEvents[1]).toMatchObject({ status: "完成", tokensOut: 5, outcome: "success" })
-		expect(data.toolEvents[2]).toMatchObject({ status: "tool_error", outcome: "failure", exitCode: 2 })
+			expect(data.toolEvents[1]).toMatchObject({ status: "完成", tokensOut: 5, outcome: "success", kind: "result" })
+			expect(data.toolEvents[2]).toMatchObject({ status: "调用", kind: "invocation" })
+			expect(data.toolEvents[3]).toMatchObject({ status: "tool_error", outcome: "failure", exitCode: 2, kind: "result" })
 		expect(data.hookEvents[0]).toMatchObject({ detail: "https · /tasks" })
 		expect(data.agentEvents[0].text?.length).toBeLessThanOrEqual(143)
 			expect(data.userEvents).toHaveLength(1)
@@ -179,5 +192,49 @@ describe("buildEnhancedWorkflowEvents", () => {
 		expect(data.userEvents).toHaveLength(0)
 		expect(data.agentEvents).toHaveLength(0)
 		expect(data.subagentEvents).toHaveLength(0)
+	})
+
+	it("skips partial command invocations to avoid duplicate entries", () => {
+		const partialCommand = createEvent({
+			id: "partial-command",
+			type: "tool",
+			title: "Tool · run_script",
+			sourceMessage: createMessage({
+				type: "ask",
+				ask: "command",
+				text: JSON.stringify({ command: "python" }),
+				partial: true,
+			}),
+		})
+		const finalCommand = createEvent({
+			id: "final-command",
+			type: "tool",
+			title: "Tool · run_script",
+			sourceMessage: createMessage({
+				type: "ask",
+				ask: "command",
+				text: JSON.stringify({ command: "python repo.py" }),
+				partial: false,
+			}),
+		})
+		const commandResult = createEvent({
+			id: "command-result",
+			type: "tool",
+			title: "Tool · run_script",
+			timestamp: 5,
+			sourceMessage: createMessage({
+				type: "say",
+				say: "command_output",
+				text: "completed",
+			}),
+		})
+		const node: WorkflowGraphNode = {
+			...baseNode,
+			events: [partialCommand, finalCommand, commandResult],
+		}
+		const data = buildEnhancedWorkflowEvents(node)
+		const invocationIds = data.toolEvents.filter((event) => event.kind === "invocation").map((event) => event.id)
+		expect(invocationIds).toEqual(["final-command"])
+		expect(data.toolEvents.some((event) => event.id === "partial-command")).toBe(false)
 	})
 })

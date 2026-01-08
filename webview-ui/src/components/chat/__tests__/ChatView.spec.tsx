@@ -1157,3 +1157,30 @@ describe("ChatView - Context Condensing Indicator Tests", () => {
 		)
 	})
 })
+
+describe("ChatView - Message filtering", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+	})
+
+	it("hides tool_result messages from the main chat stream", async () => {
+		const { container, queryByText } = renderChatView()
+		const baseTs = Date.now()
+		mockPostMessage({
+			clineMessages: [
+				{ type: "say", say: "task", ts: baseTs - 1, text: "Initial task" },
+				{ type: "say", say: "text", ts: baseTs, text: "Agent reply" },
+				{ type: "say", say: "tool_result", ts: baseTs + 1, text: "raw tool output" },
+			],
+		})
+
+		await waitFor(() => {
+			const rows = container.querySelectorAll('[data-testid="chat-row"]')
+			expect(rows).toHaveLength(1)
+			expect(rows[0].textContent).toContain("Agent reply")
+		})
+
+		expect(queryByText(/tool_result/)).not.toBeInTheDocument()
+		expect(queryByText(/raw tool output/)).not.toBeInTheDocument()
+	})
+})

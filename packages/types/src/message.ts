@@ -180,6 +180,7 @@ export const clineSays = [
 	"user_feedback",
 	"user_feedback_diff",
 	"command_output",
+	"tool_result",
 	"shell_integration_warning",
 	"browser_action",
 	"browser_action_result",

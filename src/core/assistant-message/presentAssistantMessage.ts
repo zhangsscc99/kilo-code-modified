@@ -2,7 +2,7 @@ import cloneDeep from "clone-deep"
 import { serializeError } from "serialize-error"
 import { Anthropic } from "@anthropic-ai/sdk"
 
-import type { ToolName, ClineAsk, ToolProgressStatus } from "@roo-code/types"
+import type { ToolName, ClineAsk, ToolProgressStatus, ToolProtocol } from "@roo-code/types"
 import { TelemetryService } from "@roo-code/telemetry"
 
 import { defaultModeSlug, getModeBySlug } from "../../shared/modes"
@@ -160,18 +160,7 @@ export async function presentAssistantMessage(cline: Task) {
 					return
 				}
 
-				let resultContent: string
-				let imageBlocks: Anthropic.ImageBlockParam[] = []
-
-				if (typeof content === "string") {
-					resultContent = content || "(tool did not return anything)"
-				} else {
-					const textBlocks = content.filter((item) => item.type === "text")
-					imageBlocks = content.filter((item) => item.type === "image") as Anthropic.ImageBlockParam[]
-					resultContent =
-						textBlocks.map((item) => (item as Anthropic.TextBlockParam).text).join("\n") ||
-						"(tool did not return anything)"
-				}
+				const { text: resultContent, imageBlocks } = separateToolResponseContent(content)
 
 				if (toolCallId) {
 					cline.userMessageContent.push({
@@ -184,6 +173,14 @@ export async function presentAssistantMessage(cline: Task) {
 						cline.userMessageContent.push(...imageBlocks)
 					}
 				}
+
+				logToolResultToTimeline({
+					cline,
+					toolName: toolDescription(),
+					toolProtocol,
+					toolUseId: toolCallId,
+					text: resultContent,
+				})
 
 				hasToolResult = true
 				cline.didAlreadyUseTool = true
@@ -553,21 +550,7 @@ export async function presentAssistantMessage(cline: Task) {
 
 					// For native protocol, tool_result content must be a string
 					// Images are added as separate blocks in the user message
-					let resultContent: string
-					let imageBlocks: Anthropic.ImageBlockParam[] = []
-
-					if (typeof content === "string") {
-						resultContent = content || "(tool did not return anything)"
-					} else {
-						// Separate text and image blocks
-						const textBlocks = content.filter((item) => item.type === "text")
-						imageBlocks = content.filter((item) => item.type === "image") as Anthropic.ImageBlockParam[]
-
-						// Convert text blocks to string for tool_result
-						resultContent =
-							textBlocks.map((item) => (item as Anthropic.TextBlockParam).text).join("\n") ||
-							"(tool did not return anything)"
-					}
+					const { text: resultContent, imageBlocks } = separateToolResponseContent(content)
 
 					// Add tool_result with text content only
 					cline.userMessageContent.push({
@@ -580,6 +563,14 @@ export async function presentAssistantMessage(cline: Task) {
 					if (imageBlocks.length > 0) {
 						cline.userMessageContent.push(...imageBlocks)
 					}
+
+					logToolResultToTimeline({
+						cline,
+						toolName: block.name,
+						toolProtocol,
+						toolUseId: toolCallId,
+						text: resultContent,
+					})
 
 					hasToolResult = true
 				} else {
@@ -594,6 +585,18 @@ export async function presentAssistantMessage(cline: Task) {
 					} else {
 						cline.userMessageContent.push(...content)
 					}
+
+					const normalizedText =
+						typeof content === "string"
+							? content || "(tool did not return anything)"
+							: separateToolResponseContent(content).text
+					logToolResultToTimeline({
+						cline,
+						toolName: block.name,
+						toolProtocol,
+						toolUseId: toolCallId,
+						text: normalizedText,
+					})
 				}
 
 				// For XML protocol: Only one tool per message is allowed
@@ -1215,6 +1218,75 @@ export async function presentAssistantMessage(cline: Task) {
 		await presentAssistantMessage(cline)
 		// kilocode_change end
 	}
+}
+
+type ToolResultStatus = "success" | "failure" | "denied" | "unknown"
+
+function separateToolResponseContent(content: ToolResponse) {
+	if (typeof content === "string") {
+		return {
+			text: content || "(tool did not return anything)",
+			imageBlocks: [] as Anthropic.ImageBlockParam[],
+		}
+	}
+	const textBlocks = content.filter((item): item is Anthropic.TextBlockParam => item.type === "text")
+	const imageBlocks = content.filter((item): item is Anthropic.ImageBlockParam => item.type === "image")
+	const text = textBlocks.map((item) => item.text).join("\n") || "(tool did not return anything)"
+	return { text, imageBlocks }
+}
+
+function deriveToolResultStatus(text: string): { status: ToolResultStatus; rawStatus?: string } {
+	const trimmed = text?.trim()
+	if (!trimmed) {
+		return { status: "success" }
+	}
+	try {
+		const parsed = JSON.parse(trimmed)
+		const rawStatus = typeof parsed.status === "string" ? parsed.status.toLowerCase() : undefined
+		if (rawStatus) {
+			if (rawStatus === "error" || rawStatus === "failure" || rawStatus === "failed" || rawStatus === "denied") {
+				return { status: rawStatus === "denied" ? "denied" : "failure", rawStatus }
+			}
+			if (rawStatus === "approved" || rawStatus === "success" || rawStatus === "ok" || rawStatus === "completed") {
+				return { status: "success", rawStatus }
+			}
+		}
+		const type = typeof parsed.type === "string" ? parsed.type.toLowerCase() : undefined
+		if (type === "error") {
+			return { status: "failure", rawStatus: type }
+		}
+	} catch {
+		// not JSON – fall through to heuristic checks
+	}
+	if (/(denied|error|fail|failure)/i.test(trimmed)) {
+		return { status: trimmed.toLowerCase().includes("denied") ? "denied" : "failure" }
+	}
+	return { status: "success" }
+}
+
+function logToolResultToTimeline(params: {
+	cline: Task
+	toolName: string
+	toolProtocol: ToolProtocol
+	toolUseId?: string
+	text: string
+}) {
+	const { status, rawStatus } = deriveToolResultStatus(params.text)
+	void params.cline
+		.say("tool_result", params.text, undefined, false, undefined, undefined, {
+			isNonInteractive: true,
+			metadata: {
+				toolName: params.toolName,
+				toolUseId: params.toolUseId,
+				toolProtocol: params.toolProtocol,
+				toolStatus: status,
+				rawToolStatus: rawStatus,
+				success: status === "success",
+			},
+		})
+		.catch((error) => {
+			console.warn("[presentAssistantMessage] Failed to record tool_result", error)
+		})
 }
 
 /**

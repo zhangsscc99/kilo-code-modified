@@ -192,5 +192,36 @@
   - 第二阶段：给节点增加“查看详情”链接，跳到 ChatEventTrace 或弹出对话框展示完整输出。
   - 第三阶段：结合 Agent 状态，在节点内展示状态切换、token/时间分布等图表。
 
-  整体思路：把原本的日志堆叠升级成“结构化摘要 + 可跳转原始记录”的体验，既能快速理解，也能深入追踪，解决你提到的 “原始/割裂/信息量不足” 的
-  痛点。
+整体思路：把原本的日志堆叠升级成“结构化摘要 + 可跳转原始记录”的体验，既能快速理解，也能深入追踪，解决你提到的 “原始/割裂/信息量不足” 的
+痛点。
+
+## 5. 最新实现：补全用户输入 + 工具事件
+
+> 以下内容对应 feature/simple 分支当前的实现，帮助你理解新 UI/数据链路。
+
+### 5.1 用户输入永远可见
+
+- `taskEventGraph` 现在会在每条 user_feedback/user_feedback_diff 消息出现时缓存 `timeline.lastUserMessage`，同时用 `bufferIncludesLastUser` 标记当前缓冲区是否已经带上这条输入。
+- 构建 snapshot (`createSnapshotNode`) 时，如果节点的 `ChatTraceEvent[]` 缺少触发该节点的用户消息，会把缓存的 `lastUserMessage` 预先塞进事件数组，并写入 `node.userMessage`。
+- `buildEnhancedWorkflowEvents` 在没有显式 userEvents 时，会回退到 `node.userMessage` 生成一条占位的 “用户 · xxx” 卡片；`WorkflowPanel` 也会在增强视图里渲染“暂无记录”的虚线占位，让用户明确“本节点没有新的输入”。
+
+### 5.2 工具统计 = 调用 + 结果 + 待定
+
+- `workflowNodeEvents.ts` 为每条工具事件标记 `kind = invocation | result`，并记录 outcome。只有 `kind === "invocation"` 会贡献到 `stats.toolCount`，成功/失败只在解析到结果时累加；这样就能推导 “工具待定 = 调用 - (成功 + 失败)”。
+- UI（`WorkflowPanel.tsx`）基于同一份统计展示：
+  - “工具次数” 展示 `max(invocations, successes + failures)`，避免出现“只有结果没有调用”的极端情况。
+  - 成功/失败改成 “成功 X / 总数”、“失败 Y / 总数”，并在存在待定时显示单独的 `EnhancedStat`。
+  - 每条工具卡片右上角新增 outcome 徽标（绿色=成功，红色=失败），没有结果就不显示徽标，读者一眼能看出状态。
+
+### 5.3 标准化 `tool_result`
+
+- CLI/扩展侧 `presentAssistantMessage.ts` 在 `pushToolResult` 之后，会统一调用 `logToolResultToTimeline`：
+  - `separateToolResponseContent` 把工具输出拆成纯文本 + 图片数组，解决多模态返回的问题。
+  - `deriveToolResultStatus` 尝试从 JSON payload 或关键字推断状态（success/failure/denied/unknown）。
+  - `logToolResultToTimeline` 使用 `cline.say("tool_result", …)` 把结果写回 timeline，并在 `metadata` 中附上 `toolName/toolUseId/toolProtocol/toolStatus/success` 等字段，供前端直接读取。
+- 前端解析逻辑（`deriveToolOutcome`、`getToolEventKind`）也同步读取 metadata：只要 metadata 里带有 `toolStatus` 或 `success`，就会把该消息视为 `kind === "result"` 并派生 outcome。这样即使工具没有显式的 `command_output`/`tool_error`，也能正确计算成功/失败/待定。
+
+### 5.4 测试覆盖
+
+- 新行为都在 `webview-ui` 内新增/更新了测试：`workflowNodeEvents.spec.ts` 针对“无 userEvents 但有 node.userMessage”、“两个工具调用 + 成功/失败/待定”等场景给出快照；`WorkflowPanel.spec.tsx` 断言增强视图的统计卡片与徽标。
+- 类型检查仍通过 `pnpm check-types`，保证多处共享类型（如新增的 `tool_result` say 类型）保持一致。

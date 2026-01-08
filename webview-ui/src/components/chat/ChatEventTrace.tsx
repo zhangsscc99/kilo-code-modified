@@ -22,6 +22,7 @@ const SUBAGENT_TOOL_NAMES = new Set([
 
 const TOOL_SAY_TYPES = new Set([
 	"command_output",
+	"tool_result",
 	"browser_action",
 	"browser_action_result",
 	"mcp_server_response",

@@ -73,6 +73,7 @@ import { fileExistsAtPath } from "../../utils/fs"
 import { playTts, setTtsEnabled, setTtsSpeed, stopTts } from "../../utils/tts"
 import { showSystemNotification } from "../../integrations/notifications" // kilocode_change
 import { singleCompletionHandler } from "../../utils/single-completion-handler" // kilocode_change
+import { buildApiHandler } from "../../api"
 import { searchCommits } from "../../utils/git"
 import { exportSettings, importSettingsWithFeedback } from "../config/importExport"
 import { getOpenAiModels } from "../../api/providers/openai"
@@ -1434,7 +1435,30 @@ export const webviewMessageHandler = async (
 			try {
 				const promptConfig = (await provider.getState()).apiConfiguration
 				const prompt = buildWorkflowAnalysisPrompt(payload)
-				const analysis = await singleCompletionHandler(promptConfig, prompt)
+				const handler = buildApiHandler(promptConfig)
+				if ("initialize" in handler && typeof handler.initialize === "function") {
+					await handler.initialize()
+				}
+				const stream = handler.createMessage("", [
+					{ role: "user", content: [{ type: "text", text: prompt }] },
+				])
+				let analysis = ""
+				for await (const chunk of stream) {
+					if (chunk.type === "text" && chunk.text) {
+						analysis += chunk.text
+						await provider.postMessageToWebview({
+							type: "workflowNodeAnalysisProgress",
+							workflowNodeAnalysisProgress: {
+								nodeId: payload.nodeId,
+								taskId: payload.taskId,
+								analysis,
+								textDelta: chunk.text,
+							},
+						})
+					} else if (chunk.type === "error") {
+						throw new Error(chunk.error || chunk.message)
+					}
+				}
 				await provider.postMessageToWebview({
 					type: "workflowNodeAnalysisResult",
 					workflowNodeAnalysisResult: {
@@ -1449,8 +1473,8 @@ export const webviewMessageHandler = async (
 				await provider.postMessageToWebview({
 					type: "workflowNodeAnalysisResult",
 					workflowNodeAnalysisResult: {
-						nodeId: payload.nodeId,
-						taskId: payload.taskId,
+						nodeId: parsed.success ? parsed.data.nodeId : fallbackNodeId,
+						taskId: parsed.success ? parsed.data.taskId : fallbackTaskId,
 						status: "error",
 						generatedAt: Date.now(),
 						error: error instanceof Error ? error.message : String(error),

@@ -41,6 +41,7 @@ import {
 import type {
 	WorkflowNodeAnalysisRequestPayload,
 	WorkflowNodeAnalysisResultPayload,
+	WorkflowNodeAnalysisProgressPayload,
 } from "../../../src/shared/workflowAnalysis"
 
 interface WorkflowRestoreErrorState {
@@ -568,6 +569,7 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 				nodeId: payload.nodeId,
 				taskId: payload.taskId,
 				branchId: payload.branchId ?? activeWorkflowBranchIdRef.current,
+				analysis: "",
 			},
 		}))
 		vscode.postMessage({ type: "workflowNodeAnalysis", payload })
@@ -698,6 +700,20 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 							suggestions: result.suggestions,
 							generatedAt: result.generatedAt,
 							error: result.error,
+						},
+					}))
+					break
+				}
+				case "workflowNodeAnalysisProgress": {
+					const progress = message.workflowNodeAnalysisProgress
+					if (!progress) break
+					setWorkflowNodeAnalyses((prev) => ({
+						...prev,
+						[progress.nodeId]: {
+							status: "pending",
+							nodeId: progress.nodeId,
+							taskId: progress.taskId,
+							analysis: progress.analysis,
 						},
 					}))
 					break

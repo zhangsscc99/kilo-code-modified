@@ -20,6 +20,8 @@ import {
 import {
 	workflowNodeAnalysisRequestPayloadSchema,
 	type WorkflowNodeAnalysisRequestPayload,
+	workflowNodeAnalysisProgressPayloadSchema,
+	type WorkflowNodeAnalysisProgressPayload,
 } from "./workflowAnalysis"
 
 import { Mode } from "./modes"
@@ -163,6 +165,7 @@ export interface WebviewMessage {
 		| "requestCheckpointRestoreApproval"
 		| "workflowNodeRestore"
 		| "workflowNodeAnalysis"
+		| "workflowNodeAnalysisProgress"
 		| "seeNewChanges" // kilocode_change
 		| "deleteMcpServer"
 		| "humanRelayResponse"
@@ -557,6 +560,7 @@ export type WebViewMessagePayload =
 	| RequestCheckpointRestoreApprovalPayload
 	| WorkflowNodeRestorePayload
 	| WorkflowNodeAnalysisRequestPayload
+	| WorkflowNodeAnalysisProgressPayload
 	// kilocode_change end
 	| CheckpointDiffPayload
 	| CheckpointRestorePayload

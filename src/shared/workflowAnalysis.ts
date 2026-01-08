@@ -82,6 +82,15 @@ export const workflowNodeAnalysisResultPayloadSchema = z.object({
 
 export type WorkflowNodeAnalysisResultPayload = z.infer<typeof workflowNodeAnalysisResultPayloadSchema>
 
+export const workflowNodeAnalysisProgressPayloadSchema = z.object({
+	nodeId: z.string(),
+	taskId: z.string(),
+	analysis: z.string(),
+	textDelta: z.string().optional(),
+})
+
+export type WorkflowNodeAnalysisProgressPayload = z.infer<typeof workflowNodeAnalysisProgressPayloadSchema>
+
 // Backwards-compatible aliases for webview utilities
 export type EnhancedWorkflowEventsData = WorkflowNodeAnalysisSummary
 export type EnhancedEventSummary = WorkflowNodeAnalysisEventSummary

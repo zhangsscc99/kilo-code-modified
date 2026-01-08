@@ -281,11 +281,11 @@
 - **定位**：为每个 Workflow 节点在“默认 / 增强”之外新增第三个 Tab（暂名 `分析 / Insights`），输出 AI 诊断摘要，回答“第几轮 Agent 行动触发了异常”“需要改什么提示词/工具”等问题。
 - **触发逻辑**：
   1. Webview 端 `WorkflowPanel.tsx` 扩展 `nodeEventViewModes` 为 `default | enhanced | analysis`。切换至 `analysis` 时，通过 `ExtensionStateContext` 的 `requestWorkflowNodeAnalysis`（新 action）向扩展端发送 `{ nodeId, taskId, branchId, snapshotId?, summary? }`。
-  2. 扩展端收到请求后，直接复用已有 Task 缓存或 `buildWorkflowNodesFromTaskEvents` 的结果，整理 prompt（含：节点的提示词、LLM 输出、工具调用链、成功/失败/待定、耗时/token），然后通过现有的 `this.llm.chat(...)` 模块发起一次分析调用。
-  3. 将响应包装为 `workflow_analysis_result`（含 `nodeId`, `analysis`, `insights`, `error?`, `generatedAt`）消息推回 Webview；失败时包含错误码以便重试。
+  2. 扩展端收到请求后，直接复用已有 Task 缓存或 `buildWorkflowNodesFromTaskEvents` 的结果，整理 prompt（含：节点的提示词、LLM 输出、工具调用链、成功/失败/待定、耗时/token），然后通过 `buildApiHandler().createMessage(...)` 发起 **流式** 诊断；每个 chunk 都会以 `workflowNodeAnalysisProgress` 消息回传，最终再补一个 `workflowNodeAnalysisResult`（`status=success|error`）。
+  3. 将分段/最终响应推回 Webview，结构分别是 `workflowNodeAnalysisProgress`（`nodeId`, `taskId`, `analysis`, `textDelta`）和 `workflowNodeAnalysisResult`（含 `nodeId`, `analysis`, `insights`, `error?`, `generatedAt`）。失败时同样返回 `status=error`，供 UI 给出提示与重试按钮。
 - **UI 行为**：
-  - `analysis` Tab 提供 loading/错误状态、重试按钮、可选的“查看原始事件/跳到聊天”快捷入口；成功后显示诊断摘要、推荐操作、引用的事件列表。
-  - 分析结果缓存到节点级别（例如 `analysisCache[node.id]`），刷新或再次打开时直接复用，手动点击“刷新分析”才会重新请求。
+  - `analysis` Tab 提供 loading/错误状态、重试按钮、可选的“查看原始事件/跳到聊天”快捷入口；成功后显示诊断摘要、推荐操作、引用的事件列表。流式 chunk 在“正在分析…”阶段即刻滚动展示，让用户看到实时进度。
+  - 分析结果缓存到节点级别（例如 `analysisCache[node.id]`），刷新或再次打开时直接复用，手动点击“重新分析”或触发新的请求才会清空缓存重新 streaming。
 - **文档/测试**：本节与最近的 `AI-tracing-tool-result`、`AI-tracing-agent-optimized-tracing` 等提交衔接——前者已经让工具结果有 metadata，后者改善了节点统计。下一步就是在文档、代码、测试里实现上述 tab + message 流程，并扩充 `workflowNodeEvents.spec.ts`/`WorkflowPanel.spec.tsx` 以覆盖新的状态切换、分析缓存逻辑。
 
 ### 5.4 测试覆盖

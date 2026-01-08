@@ -1123,8 +1123,11 @@ function NodeAnalysisView({
 	}
 	if (state.status === "pending") {
 		return (
-			<div className="rounded-lg border border-vscode-panel-border/80 bg-[color-mix(in_srgb,var(--vscode-editor-background)_98%,var(--vscode-panel-border))] p-3 text-[11px] text-vscode-descriptionForeground">
+			<div className="space-y-2 rounded-lg border border-vscode-panel-border/80 bg-[color-mix(in_srgb,var(--vscode-editor-background)_98%,var(--vscode-panel-border))] p-3 text-[11px] text-vscode-descriptionForeground">
 				<p>正在分析该节点…</p>
+				{state.analysis && (
+					<pre className="whitespace-pre-wrap text-[11px] text-vscode-editor-foreground">{state.analysis}</pre>
+				)}
 			</div>
 		)
 	}

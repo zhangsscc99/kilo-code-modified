@@ -32,7 +32,10 @@ import {
 	TasksByIdResponsePayload,
 	WorkflowNodeRestoreResultPayload,
 } from "./WebviewMessage"
-import { WorkflowNodeAnalysisResultPayload } from "./workflowAnalysis"
+import {
+	WorkflowNodeAnalysisResultPayload,
+	WorkflowNodeAnalysisProgressPayload,
+} from "./workflowAnalysis"
 import { ClineRulesToggles } from "./cline-rules"
 import { KiloCodeWrapperProperties } from "./kilocode/wrapper"
 import { DeploymentRecord } from "../api/providers/fetchers/sap-ai-core"
@@ -201,6 +204,7 @@ export interface ExtensionMessage {
 		| "managedIndexerState" // kilocode_change
 		| "singleCompletionResult" // kilocode_change
 		| "workflowNodeAnalysisResult"
+		| "workflowNodeAnalysisProgress"
 		| "deviceAuthStarted" // kilocode_change: Device auth initiated
 		| "deviceAuthPolling" // kilocode_change: Device auth polling update
 		| "deviceAuthComplete" // kilocode_change: Device auth successful
@@ -224,6 +228,7 @@ export interface ExtensionMessage {
 	taskEventTimestamp?: number
 	workflowNodeRestoreResult?: WorkflowNodeRestoreResultPayload
 	workflowNodeAnalysisResult?: WorkflowNodeAnalysisResultPayload
+	workflowNodeAnalysisProgress?: WorkflowNodeAnalysisProgressPayload
 	// kilocode_change end
 	// Checkpoint warning message
 	checkpointWarning?: {

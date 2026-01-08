@@ -5,6 +5,7 @@ import type { Mock } from "vitest"
 import { webviewMessageHandler } from "../webviewMessageHandler"
 import type { ClineProvider } from "../ClineProvider"
 import * as singleCompletionHandler from "../../../utils/single-completion-handler"
+import * as apiModule from "../../../api"
 
 // Mock the single completion handler
 vi.mock("../../../utils/single-completion-handler", () => ({
@@ -24,6 +25,7 @@ vi.mock("vscode", () => ({
 }))
 
 const mockSingleCompletionHandler = singleCompletionHandler.singleCompletionHandler as Mock
+const mockBuildApiHandler = vi.spyOn(apiModule, "buildApiHandler")
 
 // Mock ClineProvider
 const mockClineProvider = {
@@ -79,16 +81,17 @@ const sampleAnalysisPayload = {
 }
 
 describe("webviewMessageHandler - singleCompletion", () => {
-	beforeEach(() => {
-		vi.clearAllMocks()
-		mockClineProvider.getState = vi.fn().mockResolvedValue({
-			apiConfiguration: {
-				apiProvider: "anthropic",
-				apiKey: "test-key",
-				apiModelId: "claude-3-5-sonnet-20241022",
-			},
-		})
+beforeEach(() => {
+	vi.clearAllMocks()
+	mockClineProvider.getState = vi.fn().mockResolvedValue({
+		apiConfiguration: {
+			apiProvider: "anthropic",
+			apiKey: "test-key",
+			apiModelId: "claude-3-5-sonnet-20241022",
+		},
 	})
+	mockBuildApiHandler.mockReset()
+})
 
 	describe("Successful Completion Flow", () => {
 		it("should handle successful completion with all required parameters", async () => {
@@ -382,20 +385,34 @@ describe("webviewMessageHandler - singleCompletion", () => {
 
 	describe("workflowNodeAnalysis", () => {
 		it("invokes singleCompletionHandler and returns success", async () => {
-			mockSingleCompletionHandler.mockResolvedValue("analysis text")
+			const mockStream = async function* () {
+				yield { type: "text", text: "foo" }
+				yield { type: "text", text: "bar" }
+			}
+			mockBuildApiHandler.mockReturnValue({
+				createMessage: vi.fn(() => mockStream()),
+			} as any)
 			await webviewMessageHandler(mockClineProvider, {
 				type: "workflowNodeAnalysis",
 				payload: sampleAnalysisPayload,
 			} as any)
 
-			expect(mockSingleCompletionHandler).toHaveBeenCalled()
+			expect(mockClineProvider.postMessageToWebview).toHaveBeenCalledWith({
+				type: "workflowNodeAnalysisProgress",
+				workflowNodeAnalysisProgress: {
+					nodeId: "node-123",
+					taskId: "task-789",
+					analysis: "foo",
+					textDelta: "foo",
+				},
+			})
 			expect(mockClineProvider.postMessageToWebview).toHaveBeenCalledWith({
 				type: "workflowNodeAnalysisResult",
 				workflowNodeAnalysisResult: expect.objectContaining({
 					nodeId: "node-123",
 					taskId: "task-789",
 					status: "success",
-					analysis: "analysis text",
+					analysis: "foobar",
 					generatedAt: expect.any(Number),
 				}),
 			})

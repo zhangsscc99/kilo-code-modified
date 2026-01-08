@@ -56,6 +56,10 @@ import {
 	requestCheckpointRestoreApprovalPayloadSchema,
 	workflowNodeRestorePayloadSchema,
 } from "../../shared/WebviewMessage"
+import {
+	workflowNodeAnalysisRequestPayloadSchema,
+	type WorkflowNodeAnalysisRequestPayload,
+} from "../../shared/workflowAnalysis"
 import { checkExistKey } from "../../shared/checkExistApiConfig"
 import { experimentDefault } from "../../shared/experiments"
 import { Terminal } from "../../integrations/terminal/Terminal"
@@ -1406,6 +1410,52 @@ export const webviewMessageHandler = async (
 			} catch (error) {
 				vscode.window.showErrorMessage(t("common:errors.checkpoint_failed"))
 				await respond("error", t("common:errors.checkpoint_failed"))
+			}
+			break
+		}
+		case "workflowNodeAnalysis": {
+			const parsed = workflowNodeAnalysisRequestPayloadSchema.safeParse(message.payload)
+			const fallbackNodeId = (message.payload as { nodeId?: string })?.nodeId ?? "unknown"
+			const fallbackTaskId = (message.payload as { taskId?: string })?.taskId ?? "unknown"
+			if (!parsed.success) {
+				await provider.postMessageToWebview({
+					type: "workflowNodeAnalysisResult",
+					workflowNodeAnalysisResult: {
+						nodeId: fallbackNodeId,
+						taskId: fallbackTaskId,
+						status: "error",
+						generatedAt: Date.now(),
+						error: "Invalid workflow analysis payload",
+					},
+				})
+				break
+			}
+			const payload = parsed.data
+			try {
+				const promptConfig = (await provider.getState()).apiConfiguration
+				const prompt = buildWorkflowAnalysisPrompt(payload)
+				const analysis = await singleCompletionHandler(promptConfig, prompt)
+				await provider.postMessageToWebview({
+					type: "workflowNodeAnalysisResult",
+					workflowNodeAnalysisResult: {
+						nodeId: payload.nodeId,
+						taskId: payload.taskId,
+						status: "success",
+						analysis,
+						generatedAt: Date.now(),
+					},
+				})
+			} catch (error) {
+				await provider.postMessageToWebview({
+					type: "workflowNodeAnalysisResult",
+					workflowNodeAnalysisResult: {
+						nodeId: payload.nodeId,
+						taskId: payload.taskId,
+						status: "error",
+						generatedAt: Date.now(),
+						error: error instanceof Error ? error.message : String(error),
+					},
+				})
 			}
 			break
 		}
@@ -4360,4 +4410,97 @@ export const webviewMessageHandler = async (
 			break
 		}
 	}
+}
+
+function buildWorkflowAnalysisPrompt(payload: WorkflowNodeAnalysisRequestPayload): string {
+	const { summary, label, nodeId, branchId, mode, userMessage, startedAt, completedAt } = payload
+	const lines: string[] = []
+	lines.push(
+		"你是一名 AI 工作流诊断专家。请阅读下方的节点摘要，用中文说明：这轮 Agent 内部发生了什么、哪一步最可能导致失败或风险，并给出可以落地的修复/重试建议。",
+	)
+	lines.push("输出格式固定为两段：\n【诊断】…（简述根因/关键信息）\n【建议】…（列出 1-2 条下一步操作）")
+	lines.push("")
+	lines.push(`Node: ${label ?? nodeId}`)
+	if (mode) {
+		lines.push(`Mode: ${mode}`)
+	}
+	if (branchId) {
+		lines.push(`Branch: ${branchId}`)
+	}
+	if (startedAt) {
+		const durationSeconds = completedAt && completedAt >= startedAt ? (completedAt - startedAt) / 1000 : undefined
+		lines.push(
+			`Timing: started ${new Date(startedAt).toISOString()}${
+				durationSeconds !== undefined ? `, duration ${durationSeconds.toFixed(1)}s` : ""
+			}`,
+		)
+	}
+	const pendingTools = Math.max(summary.stats.toolCount - (summary.stats.toolSuccessCount + summary.stats.toolFailureCount), 0)
+	lines.push(
+		`Stats -> tools: ${summary.stats.toolCount} (success ${summary.stats.toolSuccessCount}, failure ${summary.stats.toolFailureCount}, pending ${pendingTools}), hooks: ${summary.stats.hookCount}, agent: ${summary.stats.agentCount}, subagent: ${summary.stats.subagentCount}`,
+	)
+	lines.push(
+		`Tokens -> in ${summary.stats.totalTokensIn}, out ${summary.stats.totalTokensOut}, duration ${summary.stats.durationMs ?? 0}ms`,
+	)
+	if (userMessage) {
+		lines.push(`User prompt: ${truncateForPrompt(userMessage)}`)
+	} else if (summary.userEvents.length > 0) {
+		lines.push(
+			`User events: ${summary.userEvents
+				.slice(0, 2)
+				.map((evt) => truncateForPrompt(evt.text || evt.label))
+				.join(" | ")}${summary.userEvents.length > 2 ? " (+more)" : ""}`,
+		)
+	}
+	lines.push(formatWorkflowAnalysisSection("Tool events", summary.toolEvents, 10))
+	lines.push(formatWorkflowAnalysisSection("Hook events", summary.hookEvents, 5))
+	lines.push(
+		formatWorkflowAnalysisSection(
+			"Agent outputs",
+			summary.agentEvents.map((event) => ({ name: event.label, detail: event.text })),
+			5,
+		),
+	)
+	lines.push(
+		formatWorkflowAnalysisSection(
+			"Subagents",
+			summary.subagentEvents.map((event) => ({ name: event.label, detail: event.text })),
+			3,
+		),
+	)
+
+	return lines.filter(Boolean).join("\n")
+}
+
+function formatWorkflowAnalysisSection(
+	label: string,
+	events: Array<{ name?: string; action?: string; status?: string; outcome?: string; detail?: string; kind?: string }>,
+	limit: number,
+): string {
+	if (!events.length) {
+		return `${label}: none`
+	}
+	const limited = events.slice(0, limit)
+	const serialized = limited
+		.map((event, index) => {
+			const segments: string[] = []
+			segments.push(`#${index + 1}`)
+			if (event.kind) segments.push(`[${event.kind}]`)
+			if (event.name) segments.push(event.name)
+			else if (event.action) segments.push(event.action)
+			if (event.status) segments.push(`status=${event.status}`)
+			if (event.outcome) segments.push(`outcome=${event.outcome}`)
+			if (event.detail) {
+				segments.push(`detail=${truncateForPrompt(event.detail, 160)}`)
+			}
+			return segments.join(" ")
+		})
+		.join("; ")
+	const suffix = events.length > limit ? ` (+${events.length - limit} more)` : ""
+	return `${label}: ${serialized}${suffix}`
+}
+
+function truncateForPrompt(value?: string, max = 240): string {
+	if (!value) return ""
+	return value.length > max ? `${value.slice(0, max)}…` : value
 }

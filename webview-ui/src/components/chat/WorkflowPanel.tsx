@@ -13,7 +13,15 @@ import {
 import { buildEnhancedWorkflowEvents } from "@/utils/workflowNodeEvents"
 import type { ReceivedTaskEvent } from "@/types/taskEvents"
 import type { WorkflowNodeRestorePayload } from "@roo/WebviewMessage"
-import type { WorkflowRestoreStateSnapshot, WorkflowBranchInfo } from "@/context/ExtensionStateContext"
+import type {
+	WorkflowRestoreStateSnapshot,
+	WorkflowBranchInfo,
+	WorkflowNodeAnalysisState,
+} from "@/context/ExtensionStateContext"
+import type {
+	WorkflowNodeAnalysisRequestPayload,
+	EnhancedWorkflowEventsData,
+} from "../../../../src/shared/workflowAnalysis"
 
 interface AgentStateSummary {
 	statusLabel: string
@@ -36,6 +44,8 @@ interface WorkflowPanelProps {
 	currentCheckpoint?: string
 	workflowRestoreState: WorkflowRestoreStateSnapshot
 	onRestoreNode: (payload: WorkflowNodeRestorePayload, metadata?: { branchId?: string }) => void
+	workflowNodeAnalyses: Record<string, WorkflowNodeAnalysisState>
+	onRequestNodeAnalysis: (payload: WorkflowNodeAnalysisRequestPayload) => void
 }
 
 const tabs = [
@@ -45,6 +55,7 @@ const tabs = [
 ] as const
 
 type TabKey = (typeof tabs)[number]["key"]
+type NodeEventViewMode = "default" | "enhanced" | "analysis"
 const ALL_BRANCHES_ID = "__all__"
 const TREE_NODE_WIDTH = 160
 const TREE_NODE_HEIGHT = 72
@@ -66,6 +77,8 @@ export function WorkflowPanel({
 	currentCheckpoint,
 	workflowRestoreState,
 	onRestoreNode,
+	workflowNodeAnalyses,
+	onRequestNodeAnalysis,
 }: WorkflowPanelProps) {
 	const messageEvents = useMemo(() => buildChatEventTrace(messages), [messages])
 	const branchMetadata = useMemo<Record<string, WorkflowBranchMetadata>>(() => {
@@ -88,7 +101,7 @@ export function WorkflowPanel({
 	const [agentStateHistory, setAgentStateHistory] = useState<AgentStateSummary[]>([])
 	const [activeNodeId, setActiveNodeId] = useState<string | null>(null)
 	const [selectedBranchId, setSelectedBranchId] = useState<string>(activeBranchId)
-	const [nodeEventViewModes, setNodeEventViewModes] = useState<Record<string, "default" | "enhanced">>({})
+	const [nodeEventViewModes, setNodeEventViewModes] = useState<Record<string, NodeEventViewMode>>({})
 	useEffect(() => {
 		setSelectedBranchId((prev) => (prev === ALL_BRANCHES_ID ? prev : activeBranchId))
 	}, [activeBranchId])
@@ -339,7 +352,14 @@ export function WorkflowPanel({
 	const renderWorkflowNode = useCallback(
 		(node: WorkflowGraphNode, idx: number, total: number) => {
 			const eventViewMode = nodeEventViewModes[node.id] ?? "default"
-			const updateNodeEventMode = (mode: "default" | "enhanced") => {
+			const analysisState = workflowNodeAnalyses[node.id]
+			const ensureAnalysisRequested = () => {
+				if (analysisState?.status === "pending" || analysisState?.status === "success") {
+					return
+				}
+				onRequestNodeAnalysis(createWorkflowAnalysisPayload(node))
+			}
+			const updateNodeEventMode = (mode: NodeEventViewMode) => {
 				setNodeEventViewModes((prev) => {
 					const current = prev[node.id] ?? "default"
 					if (current === mode) {
@@ -355,6 +375,12 @@ export function WorkflowPanel({
 					}
 					return { ...prev, [node.id]: mode }
 				})
+				if (mode === "analysis") {
+					ensureAnalysisRequested()
+				}
+			}
+			const requestFreshAnalysis = () => {
+				onRequestNodeAnalysis(createWorkflowAnalysisPayload(node))
 			}
 			const stroke = getNodeColor(node)
 			const duration = node.startedAt && node.completedAt ? node.completedAt - node.startedAt : undefined
@@ -460,28 +486,20 @@ export function WorkflowPanel({
 								<div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs text-vscode-descriptionForeground">
 									<p>{eventViewMode === "enhanced" ? "内部事件（增强版）" : "内部事件"}</p>
 									<div className="inline-flex overflow-hidden rounded-full border border-vscode-panel-border">
-										<button
-											type="button"
-											onClick={() => updateNodeEventMode("default")}
-											className={cn(
-												"px-2 py-0.5 text-[11px] border border-transparent transition-colors hover:border-[var(--vscode-focusBorder)]",
-												eventViewMode === "default"
-													? "bg-[color-mix(in_srgb,var(--vscode-editor-background)_90%,var(--vscode-focusBorder)_20%)] text-vscode-editor-foreground"
-													: "bg-transparent text-vscode-descriptionForeground",
-											)}>
-											默认
-										</button>
-										<button
-											type="button"
-											onClick={() => updateNodeEventMode("enhanced")}
-											className={cn(
-												"px-2 py-0.5 text-[11px] border border-transparent transition-colors hover:border-[var(--vscode-focusBorder)]",
-												eventViewMode === "enhanced"
-													? "bg-[color-mix(in_srgb,var(--vscode-editor-background)_90%,var(--vscode-focusBorder)_20%)] text-vscode-editor-foreground"
-													: "bg-transparent text-vscode-descriptionForeground",
-											)}>
-											增强版
-										</button>
+										{(["default", "enhanced", "analysis"] as NodeEventViewMode[]).map((mode) => (
+											<button
+												key={mode}
+												type="button"
+												onClick={() => updateNodeEventMode(mode)}
+												className={cn(
+													"px-2 py-0.5 text-[11px] border border-transparent transition-colors hover:border-[var(--vscode-focusBorder)]",
+													eventViewMode === mode
+														? "bg-[color-mix(in_srgb,var(--vscode-editor-background)_90%,var(--vscode-focusBorder)_20%)] text-vscode-editor-foreground"
+														: "bg-transparent text-vscode-descriptionForeground",
+												)}>
+												{mode === "default" ? "默认" : mode === "enhanced" ? "增强版" : "智能分析"}
+											</button>
+										))}
 									</div>
 								</div>
 
@@ -491,12 +509,28 @@ export function WorkflowPanel({
 								<div className={eventViewMode === "enhanced" ? "block" : "hidden"}>
 									<EnhancedNodeEvents node={node} />
 								</div>
+								<div className={eventViewMode === "analysis" ? "block" : "hidden"}>
+									<NodeAnalysisView
+										state={analysisState}
+										onGenerate={ensureAnalysisRequested}
+										onRefresh={requestFreshAnalysis}
+									/>
+								</div>
 							</div>
 						</div>
 					)}
 				</div>
 			)
-	}, [activeNodeId, branchMap, currentCheckpoint, nodeEventViewModes, onRestoreNode, workflowRestoreState])
+	}, [
+		activeNodeId,
+		branchMap,
+		currentCheckpoint,
+		nodeEventViewModes,
+		onRestoreNode,
+		workflowRestoreState,
+		workflowNodeAnalyses,
+		onRequestNodeAnalysis,
+	])
 
 	return (
 		<div className="fixed bottom-28 right-4 z-40 text-sm">
@@ -1063,4 +1097,107 @@ function EnhancedStat({ label, value }: { label: string; value: string | number 
 			<p className="text-sm font-semibold text-vscode-editor-foreground">{value}</p>
 		</div>
 	)
+}
+
+function NodeAnalysisView({
+	state,
+	onGenerate,
+	onRefresh,
+}: {
+	state?: WorkflowNodeAnalysisState
+	onGenerate: () => void
+	onRefresh: () => void
+}) {
+	if (!state) {
+		return (
+			<div className="rounded-lg border border-dashed border-vscode-panel-border/60 bg-[color-mix(in_srgb,var(--vscode-editor-background)_96%,var(--vscode-panel-border))] p-3 text-[11px] text-vscode-descriptionForeground">
+				<p className="mb-2">还没有生成诊断。</p>
+				<button
+					type="button"
+					onClick={onGenerate}
+					className="rounded border border-[var(--vscode-focusBorder)] px-3 py-1 text-[11px] text-vscode-editor-foreground hover:bg-[color-mix(in_srgb,var(--vscode-editor-background)_92%,var(--vscode-focusBorder)_15%)]">
+					生成智能分析
+				</button>
+			</div>
+		)
+	}
+	if (state.status === "pending") {
+		return (
+			<div className="rounded-lg border border-vscode-panel-border/80 bg-[color-mix(in_srgb,var(--vscode-editor-background)_98%,var(--vscode-panel-border))] p-3 text-[11px] text-vscode-descriptionForeground">
+				<p>正在分析该节点…</p>
+			</div>
+		)
+	}
+	if (state.status === "error") {
+		return (
+			<div className="space-y-2 rounded-lg border border-[var(--vscode-errorForeground)]/40 bg-[color-mix(in_srgb,var(--vscode-editor-background)_98%,var(--vscode-errorForeground)_8%)] p-3 text-[11px] text-[var(--vscode-errorForeground)]">
+				<p>生成分析失败：{state.error ?? "未知错误"}</p>
+				<button
+					type="button"
+					onClick={onRefresh}
+					className="rounded border border-[var(--vscode-errorForeground)] px-3 py-1 text-[var(--vscode-errorForeground)] hover:bg-[color-mix(in_srgb,var(--vscode-editor-background)_94%,var(--vscode-errorForeground)_18%)]">
+					重试
+				</button>
+			</div>
+		)
+	}
+	return (
+		<div className="space-y-3 rounded-lg border border-vscode-panel-border/80 bg-[color-mix(in_srgb,var(--vscode-editor-background)_98%,var(--vscode-panel-border))] p-3">
+			<div className="flex items-center justify-between text-[10px] text-vscode-descriptionForeground">
+				<span>AI 诊断</span>
+				{state.generatedAt && <span>{new Date(state.generatedAt).toLocaleTimeString()}</span>}
+			</div>
+			{state.analysis ? (
+				<pre className="whitespace-pre-wrap text-[11px] text-vscode-editor-foreground">{state.analysis}</pre>
+			) : (
+				<p className="text-[11px] text-vscode-descriptionForeground">（模型未返回文本）</p>
+			)}
+			{state.suggestions && state.suggestions.length > 0 && (
+				<div>
+					<p className="mb-1 text-[10px] uppercase tracking-widest text-vscode-descriptionForeground">建议</p>
+					<ul className="list-disc pl-4 text-[11px] text-vscode-editor-foreground">
+						{state.suggestions.map((item, index) => (
+							<li key={`${item}-${index}`}>{item}</li>
+						))}
+					</ul>
+				</div>
+			)}
+			<div className="flex justify-end gap-2 text-[11px]">
+				<button
+					type="button"
+					onClick={onRefresh}
+					className="rounded border border-vscode-panel-border px-2 py-0.5 text-vscode-descriptionForeground hover:text-vscode-editor-foreground">
+					重新分析
+				</button>
+			</div>
+		</div>
+	)
+}
+
+function createWorkflowAnalysisPayload(node: WorkflowGraphNode): WorkflowNodeAnalysisRequestPayload {
+	const summary = buildEnhancedWorkflowEvents(node)
+	const userMessageText = (node.userMessage as ClineMessage | undefined)?.text ?? node.userMessage?.say
+	return {
+		nodeId: node.id,
+		taskId: node.taskId,
+		branchId: node.branchId,
+		label: node.label,
+		mode: node.mode,
+		startedAt: node.startedAt,
+		completedAt: node.completedAt,
+		checkpointHash: node.checkpoint?.hash,
+		summary: truncateWorkflowSummary(summary),
+		userMessage: typeof userMessageText === "string" ? userMessageText : undefined,
+	}
+}
+
+function truncateWorkflowSummary(summary: EnhancedWorkflowEventsData): EnhancedWorkflowEventsData {
+	return {
+		...summary,
+		toolEvents: summary.toolEvents.slice(0, 12),
+		hookEvents: summary.hookEvents.slice(0, 8),
+		agentEvents: summary.agentEvents.slice(0, 6),
+		subagentEvents: summary.subagentEvents.slice(0, 4),
+		userEvents: summary.userEvents.slice(0, 4),
+	}
 }

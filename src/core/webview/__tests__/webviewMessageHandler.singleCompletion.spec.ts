@@ -36,6 +36,48 @@ const mockClineProvider = {
 	},
 } as unknown as ClineProvider
 
+const sampleAnalysisPayload = {
+	nodeId: "node-123",
+	taskId: "task-789",
+	branchId: "branch-a",
+	label: "triage",
+	summary: {
+		stats: {
+			toolCount: 2,
+			toolSuccessCount: 1,
+			toolFailureCount: 1,
+			hookCount: 0,
+			agentCount: 1,
+			subagentCount: 0,
+			totalTokensIn: 10,
+			totalTokensOut: 20,
+			durationMs: 5000,
+		},
+		toolEvents: [
+			{
+				id: "evt-1",
+				name: "run_script",
+				status: "调用",
+				kind: "invocation",
+				detail: "python3 simple.py",
+			},
+			{
+				id: "evt-2",
+				name: "run_script",
+				status: "完成",
+				kind: "result",
+				outcome: "failure",
+				detail: "exit code 1",
+			},
+		],
+		hookEvents: [],
+		userEvents: [],
+		agentEvents: [],
+		subagentEvents: [],
+		isEmpty: false,
+	},
+}
+
 describe("webviewMessageHandler - singleCompletion", () => {
 	beforeEach(() => {
 		vi.clearAllMocks()
@@ -334,6 +376,44 @@ describe("webviewMessageHandler - singleCompletion", () => {
 					completionText: req.result,
 					success: true,
 				})
+			})
+		})
+	})
+
+	describe("workflowNodeAnalysis", () => {
+		it("invokes singleCompletionHandler and returns success", async () => {
+			mockSingleCompletionHandler.mockResolvedValue("analysis text")
+			await webviewMessageHandler(mockClineProvider, {
+				type: "workflowNodeAnalysis",
+				payload: sampleAnalysisPayload,
+			} as any)
+
+			expect(mockSingleCompletionHandler).toHaveBeenCalled()
+			expect(mockClineProvider.postMessageToWebview).toHaveBeenCalledWith({
+				type: "workflowNodeAnalysisResult",
+				workflowNodeAnalysisResult: expect.objectContaining({
+					nodeId: "node-123",
+					taskId: "task-789",
+					status: "success",
+					analysis: "analysis text",
+					generatedAt: expect.any(Number),
+				}),
+			})
+		})
+
+		it("handles invalid payloads", async () => {
+			await webviewMessageHandler(mockClineProvider, {
+				type: "workflowNodeAnalysis",
+				payload: {},
+			} as any)
+
+			expect(mockSingleCompletionHandler).not.toHaveBeenCalled()
+			expect(mockClineProvider.postMessageToWebview).toHaveBeenCalledWith({
+				type: "workflowNodeAnalysisResult",
+				workflowNodeAnalysisResult: expect.objectContaining({
+					status: "error",
+					error: "Invalid workflow analysis payload",
+				}),
 			})
 		})
 	})

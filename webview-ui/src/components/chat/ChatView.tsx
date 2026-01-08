@@ -120,6 +120,8 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 		currentCheckpoint,
 		workflowRestoreState,
 		requestWorkflowNodeRestore,
+		workflowNodeAnalyses,
+		requestWorkflowNodeAnalysis,
 	} = useExtensionState()
 
 	const messagesRef = useRef(messages)
@@ -1849,8 +1851,10 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 												currentCheckpoint={currentCheckpoint}
 												workflowBranches={workflowBranches}
 												activeBranchId={activeWorkflowBranchId}
-												workflowRestoreState={workflowRestoreState}
-												onRestoreNode={requestWorkflowNodeRestore}
+					workflowRestoreState={workflowRestoreState}
+					onRestoreNode={requestWorkflowNodeRestore}
+					workflowNodeAnalyses={workflowNodeAnalyses}
+					onRequestNodeAnalysis={requestWorkflowNodeAnalysis}
 				/>
 			)}
 

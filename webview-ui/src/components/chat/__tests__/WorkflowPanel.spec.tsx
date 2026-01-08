@@ -155,6 +155,8 @@ describe("WorkflowPanel", () => {
 					activeBranchId={DEFAULT_WORKFLOW_BRANCH_ID}
 					workflowRestoreState={baseWorkflowRestoreState}
 					onRestoreNode={handleRestore}
+					workflowNodeAnalyses={{}}
+					onRequestNodeAnalysis={vi.fn()}
 				/>
 			</TooltipProvider>,
 		)
@@ -188,6 +190,8 @@ describe("WorkflowPanel", () => {
 					activeBranchId={DEFAULT_WORKFLOW_BRANCH_ID}
 					workflowRestoreState={baseWorkflowRestoreState}
 					onRestoreNode={handleRestore}
+						workflowNodeAnalyses={{}}
+						onRequestNodeAnalysis={vi.fn()}
 				/>
 			</TooltipProvider>,
 		)
@@ -203,6 +207,44 @@ describe("WorkflowPanel", () => {
 		const workflowNodeButtons = screen.getAllByRole("button", { name: /1\.\s*triage/i })
 		await user.click(workflowNodeButtons[0])
 		expect(screen.getByText(/内部事件/)).toBeInTheDocument()
+	})
+
+	it("requests analysis when selecting 智能分析 tab", async () => {
+		const user = userEvent.setup()
+		const handleRestore = vi.fn()
+		const handleAnalysis = vi.fn()
+		render(
+			<TooltipProvider>
+				<WorkflowPanel
+					messages={[...messages, checkpointMessage]}
+					taskEvents={[...sharedTaskEvents, checkpointTaskEvent]}
+					collapsed={false}
+					onToggleCollapse={() => {}}
+					onClose={() => {}}
+					agentState={{
+						statusLabel: "Streaming",
+						mode: "code",
+						taskLabel: "task",
+						messageCount: messages.length,
+						lastEvent: "response",
+						lastUpdated: "now",
+					}}
+					currentCheckpoint={undefined}
+					workflowBranches={baseBranches}
+					activeBranchId={DEFAULT_WORKFLOW_BRANCH_ID}
+					workflowRestoreState={baseWorkflowRestoreState}
+					onRestoreNode={handleRestore}
+					workflowNodeAnalyses={{}}
+					onRequestNodeAnalysis={handleAnalysis}
+				/>
+			</TooltipProvider>,
+		)
+
+		const workflowNodeButtons = screen.getAllByRole("button", { name: /1\.\s*triage/i })
+		await user.click(workflowNodeButtons[0])
+		await user.click(screen.getByRole("button", { name: "智能分析" }))
+		expect(handleAnalysis).toHaveBeenCalledTimes(1)
+		expect(handleAnalysis.mock.calls[0][0]).toMatchObject({ nodeId: expect.any(String), summary: expect.any(Object) })
 	})
 
 	it("renders collapsed summary when collapsed", () => {
@@ -221,6 +263,8 @@ describe("WorkflowPanel", () => {
 					activeBranchId={DEFAULT_WORKFLOW_BRANCH_ID}
 					workflowRestoreState={baseWorkflowRestoreState}
 					onRestoreNode={handleRestore}
+						workflowNodeAnalyses={{}}
+						onRequestNodeAnalysis={vi.fn()}
 				/>
 			</TooltipProvider>,
 		)
@@ -246,6 +290,8 @@ describe("WorkflowPanel", () => {
 					activeBranchId={DEFAULT_WORKFLOW_BRANCH_ID}
 					workflowRestoreState={baseWorkflowRestoreState}
 					onRestoreNode={handleRestore}
+						workflowNodeAnalyses={{}}
+						onRequestNodeAnalysis={vi.fn()}
 				/>
 			</TooltipProvider>,
 		)
@@ -282,6 +328,8 @@ describe("WorkflowPanel", () => {
 					activeBranchId="branch-b"
 					workflowRestoreState={baseWorkflowRestoreState}
 					onRestoreNode={handleRestore}
+						workflowNodeAnalyses={{}}
+						onRequestNodeAnalysis={vi.fn()}
 				/>
 			</TooltipProvider>,
 		)

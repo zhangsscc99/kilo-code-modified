@@ -1,6 +1,12 @@
 import type { WorkflowGraphNode } from "@/utils/taskEventGraph"
 import type { ChatTraceEvent } from "@/components/chat/ChatEventTrace"
 import type { ClineMessage } from "@roo-code/types"
+import type {
+	EnhancedAgentSummary,
+	EnhancedEventSummary,
+	EnhancedUserSummary,
+	EnhancedWorkflowEventsData,
+} from "../../../src/shared/workflowAnalysis"
 import { safeJsonParse } from "@roo/safeJsonParse"
 
 const USER_SAY_TYPES = new Set(["user_feedback", "user_feedback_diff"])
@@ -12,54 +18,6 @@ const TOOL_RESULT_SAYS = new Set([
 	"mcp_server_response",
 	"codebase_search_result",
 ])
-
-export interface EnhancedWorkflowEventsData {
-	stats: {
-		toolCount: number
-		toolSuccessCount: number
-		toolFailureCount: number
-		hookCount: number
-		agentCount: number
-		subagentCount: number
-		totalTokensIn: number
-		totalTokensOut: number
-		durationMs?: number
-	}
-	toolEvents: EnhancedEventSummary[]
-	hookEvents: EnhancedEventSummary[]
-	userEvents: EnhancedUserSummary[]
-	agentEvents: EnhancedAgentSummary[]
-	subagentEvents: EnhancedAgentSummary[]
-	isEmpty: boolean
-}
-
-export interface EnhancedEventSummary {
-	id: string
-	name?: string
-	action?: string
-	status?: string
-	outcome?: "success" | "failure"
-	kind?: "invocation" | "result" | "other"
-	detail?: string
-	tokensIn?: number
-	tokensOut?: number
-	exitCode?: number
-	timestamp?: number
-}
-
-export interface EnhancedAgentSummary {
-	id: string
-	label: string
-	text?: string
-	timestamp?: number
-}
-
-export interface EnhancedUserSummary {
-	id: string
-	label: string
-	text?: string
-	timestamp?: number
-}
 
 export function buildEnhancedWorkflowEvents(node: WorkflowGraphNode): EnhancedWorkflowEventsData {
 	const stats = {

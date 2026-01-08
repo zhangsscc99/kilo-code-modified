@@ -38,6 +38,10 @@ import {
 	getCheckpointHash,
 	type WorkflowBranchMetadata,
 } from "@/utils/taskEventGraph"
+import type {
+	WorkflowNodeAnalysisRequestPayload,
+	WorkflowNodeAnalysisResultPayload,
+} from "../../../src/shared/workflowAnalysis"
 
 interface WorkflowRestoreErrorState {
 	snapshotId: string
@@ -53,6 +57,17 @@ export interface WorkflowRestoreStateSnapshot {
 export interface WorkflowBranchInfo extends WorkflowBranchMetadata {
 	status: "active" | "archived"
 	latestSnapshotId?: string
+}
+
+export interface WorkflowNodeAnalysisState {
+	status: "pending" | "success" | "error"
+	nodeId: string
+	taskId: string
+	branchId?: string
+	analysis?: string
+	suggestions?: string[]
+	generatedAt?: number
+	error?: string
 }
 
 export interface ExtensionStateContextType extends ExtensionState {
@@ -111,6 +126,8 @@ export interface ExtensionStateContextType extends ExtensionState {
 		payload: WorkflowNodeRestorePayload,
 		metadata?: { branchId?: string },
 	) => void
+	workflowNodeAnalyses: Record<string, WorkflowNodeAnalysisState>
+	requestWorkflowNodeAnalysis: (payload: WorkflowNodeAnalysisRequestPayload) => void
 	organizationAllowList: OrganizationAllowList
 	organizationSettingsVersion: number
 	cloudIsAuthenticated: boolean
@@ -419,6 +436,7 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 		lastError: null,
 	})
 	const workflowRestoreRequestsRef = useRef<Record<string, { payload: WorkflowNodeRestorePayload; branchId?: string }>>({})
+	const [workflowNodeAnalyses, setWorkflowNodeAnalyses] = useState<Record<string, WorkflowNodeAnalysisState>>({})
 	const [mcpServers, setMcpServers] = useState<McpServer[]>([])
 	const [mcpMarketplaceCatalog, setMcpMarketplaceCatalog] = useState<McpMarketplaceCatalog>({ items: [] }) // kilocode_change
 	const [currentCheckpoint, setCurrentCheckpoint] = useState<string>()
@@ -542,6 +560,19 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 		[],
 	)
 
+	const requestWorkflowNodeAnalysis = useCallback((payload: WorkflowNodeAnalysisRequestPayload) => {
+		setWorkflowNodeAnalyses((prev) => ({
+			...prev,
+			[payload.nodeId]: {
+				status: "pending",
+				nodeId: payload.nodeId,
+				taskId: payload.taskId,
+				branchId: payload.branchId ?? activeWorkflowBranchIdRef.current,
+			},
+		}))
+		vscode.postMessage({ type: "workflowNodeAnalysis", payload })
+	}, [])
+
 	const handleMessage = useCallback(
 		(event: MessageEvent) => {
 			const message: ExtensionMessage = event.data
@@ -654,6 +685,23 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 					}
 					break
 				}
+				case "workflowNodeAnalysisResult": {
+					const result = message.workflowNodeAnalysisResult
+					if (!result) break
+					setWorkflowNodeAnalyses((prev) => ({
+						...prev,
+						[result.nodeId]: {
+							status: result.status,
+							nodeId: result.nodeId,
+							taskId: result.taskId,
+							analysis: result.analysis,
+							suggestions: result.suggestions,
+							generatedAt: result.generatedAt,
+							error: result.error,
+						},
+					}))
+					break
+				}
 				case "messageUpdated": {
 					const clineMessage = message.clineMessage!
 					setState((prevState) => {
@@ -758,6 +806,8 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 		activeWorkflowBranchId,
 		workflowRestoreState,
 		requestWorkflowNodeRestore,
+		workflowNodeAnalyses,
+		requestWorkflowNodeAnalysis,
 		soundVolume: state.soundVolume,
 		ttsSpeed: state.ttsSpeed,
 		fuzzyMatchThreshold: state.fuzzyMatchThreshold,

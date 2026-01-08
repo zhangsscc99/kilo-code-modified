@@ -220,6 +220,73 @@
   - `deriveToolResultStatus` 尝试从 JSON payload 或关键字推断状态（success/failure/denied/unknown）。
   - `logToolResultToTimeline` 使用 `cline.say("tool_result", …)` 把结果写回 timeline，并在 `metadata` 中附上 `toolName/toolUseId/toolProtocol/toolStatus/success` 等字段，供前端直接读取。
 - 前端解析逻辑（`deriveToolOutcome`、`getToolEventKind`）也同步读取 metadata：只要 metadata 里带有 `toolStatus` 或 `success`，就会把该消息视为 `kind === "result"` 并派生 outcome。这样即使工具没有显式的 `command_output`/`tool_error`，也能正确计算成功/失败/待定。
+- **工具结果数据流细节**：
+  - `packages/types/src/message.ts` 新增 `"tool_result"` 类型，保证扩展与 webview 共享 schema。
+  - `src/core/assistant-message/presentAssistantMessage.ts` 中，所有 `pushToolResult` 分支（包含 streaming 工具、MCP server 响应等）都会调用上面的 `logToolResultToTimeline`。该 helper 负责：
+    1. 通过 `separateToolResponseContent` 将 `ToolResponse` 拆分成纯文本与图片数组，避免 JSON/二进制混杂。
+    2. 把文本交给 `deriveToolResultStatus`，先尝试解析 JSON 的 `status/type/success` 字段，解析失败再 fallback 为关键字匹配（denied/error/fail）。
+    3. 调用 `cline.say("tool_result", text, …, { metadata })`，附带工具名、协议、`toolUseId`、派生出的 `toolStatus/rawToolStatus/success`。`say` 调用不会阻塞主流程，内部用 `void ...catch` 捕获异常避免拖慢推理。
+  - webview 侧：
+    * `webview-ui/src/utils/workflowNodeEvents.ts` 的 `getToolEventKind` / `deriveToolOutcome` 会优先读取 metadata 中的 `toolStatus` / `success`，判定该事件是否为结果以及它的结局；`ChatView` 的 `visibleMessages` 过滤逻辑（`webview-ui/src/components/chat/ChatView.tsx:1003`）则直接隐藏 `say: "tool_result"`，避免在主对话里重复显示。
+    * Enhanced 视图里，`buildEnhancedWorkflowEvents` 依赖 metadata 来计算成功/失败数量，统计“待定 = 调用数 - (成功 + 失败)”再传给 `WorkflowPanel`，从而在 UI 上显示“工具次数 / 成功 / 失败 / 待定”和成功/失败徽章。
+
+整体串起来的链路如下：工具实现 → `pushToolResult` → `logToolResultToTimeline`（新增 `tool_result` 消息）→ webview `taskEventGraph`/`ChatEventTrace` 接收 → Workflow 面板解析 metadata → UI 统计/展示；任何第三方工具只要遵循这份 say 类型即可被统一收口。
+
+## 6. 需求演进 / 下一步计划
+
+> 目标：把 Workflow/ChatEventTrace 变成“可溯源的 Agent 执行链”，支撑模型评估、工具能力优化、以及大型工程协作。与负责人讨论后的关键诉求：
+
+1. **Agent 视角更完整**
+   - checkpoint 粒度过大，需进一步细化：记录“每轮提示词 → LLM 推理 → 工具调用 → 结果”，并保留模型、模式、提示词等 metadata，方便服务端打点与智能分析。
+   - 能回答“某个不理想输出是第几轮 Agent 行动造成的？提示词内容是什么？”。
+2. **工具链清晰可追责**
+   - 展示完整的工具调用链，含重试次数、参数、耗时、token、exit code，特别是定位 write file 等工具在哪一步写错文件，支撑工具层面的能力优化。
+   - 避免流式 partial 指令导致的重复事件，准确统计“调用次数”“成功/失败”并可将逐步输入还原成最终命令。
+3. **多视角联动与可视化提示**
+   - 节点内部需要快速跳转到 ChatEventTrace / 主聊天，或直接提供 mini timeline，让上下文更连贯。
+   - 对不同事件类型使用图标/颜色/耗时条等视觉元素，并在多模型场景中展示当前模型/规则/Agent 模式，方便横向比较与规则检索。
+4. **渐进式实施路线**
+   - 第一阶段（当前）：结构化摘要（工具统计、`tool_result` metadata、用户输入回填）。
+   - 第二阶段：加入“查看详情/跳转”能力、mini timeline、更多视觉提示，让信息更直观。
+   - 第三阶段：结合 Agent State/模型评估，在节点中呈现状态切换、token/时间分布、甚至 LLM 评分，满足“多背景一起做大的工程”的需求。
+
+实现以上能力后，Workflow 面板才能回答领导关心的问题：“内部事件是否足够清楚？工具/Agent 行动链是否可追责？在哪一轮写错文件？不同模型/规则表现怎样？”。
+
+### 6.1 任务拆解（候选）
+
+1. **多视角联动**：在 Workflow 节点中加入“查看原始记录”入口（跳转 ChatEventTrace 或弹出 mini timeline），需要：交互设计、跳转逻辑、相应测试。
+2. **可视化提示**：统一事件图标/颜色，显示耗时条、token 等小组件，让非技术同学也能快速理解。需要：设计规范、`workflowNodeEvents` 输出更多元数据、WorkflowPanel 渲染实现。
+3. **Prompt/LLM 链路**：在 `taskEventGraph` 中补充每轮提示词和 LLM 输出（含模型/模式），增强视图展示“第 N 轮 Agent 行动”。需要：schema 调整、卡片布局、与 toolEvents 关联。
+4. **工具追责增强**：把工具重试次数、参数、exit code、耗时组合成“调用记录表”，允许折叠/展开查看命令与输出，并继续优化 partial→final 合并策略。
+5. **多模型/规则标识**：在节点/卡片上显示当前模型、规则、Agent 模式，支持过滤和对比；需要 ExtensionState 提供 metadata、UI 设计、过滤交互。
+6. **Agent State 图表**：结合 Agent Manager 状态与 token/时间分布，提供可视化图表（折线/甘特/桑基）辅助评估。
+
+### 6.2 设计草图（文字说明）
+
+- **节点增强卡片**：左侧展示“提示词 + LLM 输出”迷你卡，右侧垂直排列“Prompt → Tool Invocation → Tool Result”行动链，每一步配图标/颜色/耗时条；下方放“查看原始记录”按钮。
+- **工具调用表**：在工具区按调用分组（如 `run_script（3 次）`），展开后形成时间线/表格，列出参数摘要、耗时、token、exit code，partial 输入在同一记录里灰色占位。
+- **多模型/规则标识**：Workflow 面板顶部显示 Model/Mode/Rules badge，并提供 Hover Tooltip 展示详细配置，未来可支持筛选。
+- **Mini timeline/跳转按钮**：节点右上角放“查看流”按钮，侧边弹出 mini timeline；节点底部附“滚动到聊天/事件”链接，保持视图连贯。
+- **Agent State 图表（阶段 3）**：在增强视图的下方预留图表区域（token 折线、状态甘特等），用于分析耗时/耗 token 的段落和 Agent 状态切换。
+
+### 6.3 模型调用链路说明（供“智能分析”复用）
+
+- 扩展端任务（`src/core/task/Task.ts`）在每轮推理时统一调用 `this.llm.streamChat(...)`/`chat(...)`。`this.llm` 来自 Continue 的 LLM 模块，负责实际打到 OpenAI、Azure、Mistral 或自建 proxy APIs。
+- LLM 模块入口为 `src/services/continuedev/core/llm/index.ts`：`BaseLLM` 根据 provider（OpenAI、Azure、continue-proxy、自定义）创建适配器（`constructLlmApi`），并暴露 `streamChat`、`streamComplete` 等接口，上层完全不关心底层是哪种模型。
+- 不管用户配置了哪个模型/provider，Task/Workflow 等上层逻辑都复用同一个 `LLM` 实例：只要构造好 prompt/messages 交给 `this.llm`，底层就会传给正确的模型 API 并返回 chunk。
+- 因此，如果要在 Workflow 节点新增“智能分析”按钮，我们应复用这套通道：Webview 发消息 → 扩展端 Task 收到后调用 `this.llm.chat(...)`（把节点的结构化数据拼成 prompt）→ 将诊断结果回传给 Webview。这样无论接入什么模型/部署方式，都走同一入口，减少重复集成工作。
+
+### 6.4 “智能分析”视图（进行中）
+
+- **定位**：为每个 Workflow 节点在“默认 / 增强”之外新增第三个 Tab（暂名 `分析 / Insights`），输出 AI 诊断摘要，回答“第几轮 Agent 行动触发了异常”“需要改什么提示词/工具”等问题。
+- **触发逻辑**：
+  1. Webview 端 `WorkflowPanel.tsx` 扩展 `nodeEventViewModes` 为 `default | enhanced | analysis`。切换至 `analysis` 时，通过 `ExtensionStateContext` 的 `requestWorkflowNodeAnalysis`（新 action）向扩展端发送 `{ nodeId, taskId, branchId, snapshotId?, summary? }`。
+  2. 扩展端收到请求后，直接复用已有 Task 缓存或 `buildWorkflowNodesFromTaskEvents` 的结果，整理 prompt（含：节点的提示词、LLM 输出、工具调用链、成功/失败/待定、耗时/token），然后通过现有的 `this.llm.chat(...)` 模块发起一次分析调用。
+  3. 将响应包装为 `workflow_analysis_result`（含 `nodeId`, `analysis`, `insights`, `error?`, `generatedAt`）消息推回 Webview；失败时包含错误码以便重试。
+- **UI 行为**：
+  - `analysis` Tab 提供 loading/错误状态、重试按钮、可选的“查看原始事件/跳到聊天”快捷入口；成功后显示诊断摘要、推荐操作、引用的事件列表。
+  - 分析结果缓存到节点级别（例如 `analysisCache[node.id]`），刷新或再次打开时直接复用，手动点击“刷新分析”才会重新请求。
+- **文档/测试**：本节与最近的 `AI-tracing-tool-result`、`AI-tracing-agent-optimized-tracing` 等提交衔接——前者已经让工具结果有 metadata，后者改善了节点统计。下一步就是在文档、代码、测试里实现上述 tab + message 流程，并扩充 `workflowNodeEvents.spec.ts`/`WorkflowPanel.spec.tsx` 以覆盖新的状态切换、分析缓存逻辑。
 
 ### 5.4 测试覆盖
 

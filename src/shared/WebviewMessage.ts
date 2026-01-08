@@ -17,6 +17,11 @@ import {
 	// kilocode_change end
 } from "@roo-code/types"
 
+import {
+	workflowNodeAnalysisRequestPayloadSchema,
+	type WorkflowNodeAnalysisRequestPayload,
+} from "./workflowAnalysis"
+
 import { Mode } from "./modes"
 
 export type ClineAskResponse =
@@ -157,6 +162,7 @@ export interface WebviewMessage {
 		| "checkpointRestore"
 		| "requestCheckpointRestoreApproval"
 		| "workflowNodeRestore"
+		| "workflowNodeAnalysis"
 		| "seeNewChanges" // kilocode_change
 		| "deleteMcpServer"
 		| "humanRelayResponse"
@@ -550,6 +556,7 @@ export type WebViewMessagePayload =
 	| TaskHistoryRequestPayload
 	| RequestCheckpointRestoreApprovalPayload
 	| WorkflowNodeRestorePayload
+	| WorkflowNodeAnalysisRequestPayload
 	// kilocode_change end
 	| CheckpointDiffPayload
 	| CheckpointRestorePayload
